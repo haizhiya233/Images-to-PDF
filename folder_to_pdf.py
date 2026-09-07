@@ -5,8 +5,12 @@
 使用方法：
   1. 双击本脚本（或命令行运行）。
   2. 控制台提示时，把图片文件夹拖进窗口，按 Enter。
-  3. 脚本自动收集该文件夹（仅顶层，不含子文件夹）的图片，按文件名自然排序，
+  3. 脚本自动收集该文件夹的图片，按文件名自然排序，
      然后调用 IrfanView 的 /multipdf 生成一个多页 PDF，保存到 OUTPUT_DIR。
+
+两种模式：
+  - 文件夹直接含图片：生成单个 PDF（以该文件夹名命名）。
+  - 文件夹含子文件夹（且子文件夹有图片）：批量模式，每个子文件夹各生成一个 PDF。
 
 处理完成后窗口不会关闭，可继续把其他文件夹拖进窗口继续工作；
 输入 exit/quit/q 或直接关闭窗口即退出。
@@ -176,8 +180,63 @@ def prompt_folder():
     return raw
 
 
+def convert_single_folder(folder, irfan):
+    """把单个文件夹转成 PDF，返回生成的 PDF 路径或 None（失败时打印错误）。
+
+    此函数不做路径校验（由调用方负责），集中处理从收集图片到生成 PDF 的完整流程。
+    """
+    images = collect_images(folder)
+    print(f"找到 {len(images)} 张图片，正在生成 PDF ...")
+
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    output_pdf = OUTPUT_DIR / f"{folder.name}.pdf"
+
+    cmd, tmp_list = build_multipdf_cmd(irfan, output_pdf, images)
+    if tmp_list:
+        print(f"图片较多，已使用文件列表方式：{tmp_list}")
+
+    print("正在调用 IrfanView 生成 PDF ...")
+    try:
+        # shell=True 必须：列表传参的 list2cmdline 会转义 /multipdf=(...) 内嵌引号，导致 IrfanView 静默失败
+        result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=600)
+    except subprocess.TimeoutExpired:
+        raise RuntimeError("IrfanView 处理超时（>600 秒），可能图片过多或插件异常。")
+
+    # 清理临时文件列表
+    if tmp_list:
+        try:
+            os.unlink(tmp_list)
+        except Exception:
+            pass
+
+    if output_pdf.exists() and output_pdf.stat().st_size > 0:
+        print("\n✅ 生成成功！")
+        print(f"   输出文件：{output_pdf}")
+        print(f"   页数（图片数）：{len(images)}")
+        return output_pdf
+    else:
+        stderr = (result.stderr or "")[-400:]
+        raise RuntimeError(f"IrfanView 未生成 PDF。退出码：{result.returncode}\n{stderr}")
+
+
+def subfolders_with_images(folder):
+    """返回 folder 下含图片的子文件夹，按自然序排序；无则返回空列表。"""
+    subs = [
+        p for p in folder.iterdir()
+        if p.is_dir() and any(x.is_file() and x.suffix.lower() in IMAGE_EXTS for x in p.iterdir())
+    ]
+    subs.sort(key=lambda p: natural_key(p.name))
+    return subs
+
+
 def convert_folder(raw):
-    """把单个文件夹转成 PDF。成功或失败都会打印结果，不抛出未捕获异常。"""
+    """把文件夹转成 PDF。
+
+    两种模式：
+      - 若文件夹直接含图片 -> 生成单个 PDF。
+      - 若文件夹含子文件夹（且子文件夹有图片）-> 批量模式，每个子文件夹各生成一个 PDF。
+    成功或失败都会打印结果，不抛出未捕获异常。
+    """
     folder = Path(raw)
     try:
         if not folder.exists():
@@ -185,42 +244,28 @@ def convert_folder(raw):
         if not folder.is_dir():
             raise ValueError(f"路径不是文件夹：{folder}")
 
-        images = collect_images(folder)
-        print(f"找到 {len(images)} 张图片，正在生成 PDF ...")
+        subdirs = subfolders_with_images(folder)
+        if subdirs:
+            irfan = resolve_irfanview()
+            print(f"IrfanView: {irfan}")
+            check_pdf_plugin(irfan.parent)
+            print(f"\n检测到 {len(subdirs)} 个子文件夹，开始批量处理 ...")
+            ok, fail = 0, 0
+            for i, sub in enumerate(subdirs, 1):
+                print(f"\n[{i}/{len(subdirs)}] {sub.name} ...")
+                try:
+                    convert_single_folder(sub, irfan)
+                    ok += 1
+                except Exception as e:
+                    print(f"   ❌ 该子文件夹转换失败：{e}")
+                    fail += 1
+            print(f"\n批量处理完成：成功 {ok} 个，失败 {fail} 个。")
+            return
 
         irfan = resolve_irfanview()
         print(f"IrfanView: {irfan}")
-
         check_pdf_plugin(irfan.parent)
-
-        OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-        output_pdf = OUTPUT_DIR / f"{folder.name}.pdf"
-
-        cmd, tmp_list = build_multipdf_cmd(irfan, output_pdf, images)
-        if tmp_list:
-            print(f"图片较多，已使用文件列表方式：{tmp_list}")
-
-        print("正在调用 IrfanView 生成 PDF ...")
-        try:
-            # shell=True 必须：列表传参的 list2cmdline 会转义 /multipdf=(...) 内嵌引号，导致 IrfanView 静默失败
-            result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=600)
-        except subprocess.TimeoutExpired:
-            raise RuntimeError("IrfanView 处理超时（>600 秒），可能图片过多或插件异常。")
-
-        # 清理临时文件列表
-        if tmp_list:
-            try:
-                os.unlink(tmp_list)
-            except Exception:
-                pass
-
-        if output_pdf.exists() and output_pdf.stat().st_size > 0:
-            print("\n✅ 生成成功！")
-            print(f"   输出文件：{output_pdf}")
-            print(f"   页数（图片数）：{len(images)}")
-        else:
-            stderr = (result.stderr or "")[-400:]
-            raise RuntimeError(f"IrfanView 未生成 PDF。退出码：{result.returncode}\n{stderr}")
+        convert_single_folder(folder, irfan)
 
     except Exception as e:
         print(f"\n❌ 出错了：{e}")

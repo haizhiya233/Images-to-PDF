@@ -23,6 +23,7 @@ spec.loader.exec_module(folder_to_pdf)
 natural_key = folder_to_pdf.natural_key
 collect_images = folder_to_pdf.collect_images
 build_multipdf_cmd = folder_to_pdf.build_multipdf_cmd
+subfolders_with_images = folder_to_pdf.subfolders_with_images
 IMAGE_EXTS = folder_to_pdf.IMAGE_EXTS
 
 
@@ -133,6 +134,46 @@ class TestBuildMultipdfCmd(unittest.TestCase):
         self.assertIn("/multipdf=", cmd)
         # 内嵌引号必须原样保留（shell=True 依赖此特性），不能是转义反斜杠
         self.assertNotIn('\\"', cmd)
+
+
+class TestSubfoldersWithImages(unittest.TestCase):
+    """批量模式检测：只返回含图片的子文件夹，按自然序排序。"""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.folder = Path(self.tmp.name)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_returns_only_subdirs_with_images(self):
+        (self.folder / "第1集").mkdir()
+        (self.folder / "第1集" / "001.jpg").write_bytes(b"x")
+        (self.folder / "第2集").mkdir()
+        (self.folder / "第2集" / "002.png").write_bytes(b"x")
+        (self.folder / "空集").mkdir()  # 无图片，应被忽略
+        (self.folder / "只有文本").mkdir()
+        (self.folder / "只有文本" / "a.txt").write_bytes(b"x")
+        subs = subfolders_with_images(self.folder)
+        self.assertEqual([p.name for p in subs], ["第1集", "第2集"])
+
+    def test_natural_sort_and_ignore_non_image_file_in_sub(self):
+        (self.folder / "第10集").mkdir()
+        (self.folder / "第10集" / "x.jpg").write_bytes(b"x")
+        (self.folder / "第2集").mkdir()
+        (self.folder / "第2集" / "x.jpg").write_bytes(b"x")
+        subs = subfolders_with_images(self.folder)
+        # 自然序：第2集 排在 第10集 前
+        self.assertEqual([p.name for p in subs], ["第2集", "第10集"])
+
+    def test_returns_empty_when_no_subdir(self):
+        (self.folder / "直接图片.jpg").write_bytes(b"x")
+        self.assertEqual(subfolders_with_images(self.folder), [])
+
+    def test_returns_empty_when_no_image_anywhere(self):
+        (self.folder / "a").mkdir()
+        (self.folder / "a" / "x.txt").write_bytes(b"x")
+        self.assertEqual(subfolders_with_images(self.folder), [])
 
 
 if __name__ == "__main__":
