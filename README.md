@@ -11,12 +11,15 @@ Uses IrfanView's native command-line `/multipdf` instead of GUI automation (mous
 ## Features / 功能特性
 
 - 📁 Drag & drop a folder path into the console, press Enter → done
+- ♻️ **Keep running** — process multiple folders in one session; the console stays open until you close it
+- 🛡️ Errors in one folder do **not** interrupt the loop — drop in the next folder right away
 - 🖼️ Collects images from the **top level only** (no recursion into subfolders)
 - 🔢 **Natural sort** — `2.jpg` comes before `10.jpg`
 - 📄 Generates a multi-page PDF named after the folder
 - ✅ Validates IrfanView and its PDF plugin before running
 - 🔧 Smart IrfanView auto-detection (5 strategies, incl. resolving `IrfanView 64.lnk`)
 - 🇨🇳 Localized Chinese console output
+- ❌ Exit via `exit`/`quit`/`q`, `Ctrl+C`, or just closing the window
 
 ## Supported image formats / 支持的图片格式
 
@@ -49,10 +52,30 @@ cd Images-to-PDF
 ==================================================
 图片合并成 PDF 工具
 ==================================================
+处理完成后窗口不会关闭，可继续拖入其他文件夹。
+输入 exit 或直接关闭窗口即可退出。
+--------------------------------------------------
 请把【图片文件夹】拖到此窗口，然后按 Enter 开始：
 ```
 
-The resulting PDF is written to the output directory (see configuration), named after your folder (e.g. `001_第1集.pdf`).
+The resulting PDF is written to the output directory (see configuration), named after your folder (e.g. `002_第2集.pdf`).
+
+### Process multiple folders in one session / 一次处理多个文件夹
+
+The console **keeps running** after each conversion, so you can drag in one folder after another without restarting:
+
+```
+--------------------------------------------------
+请把【图片文件夹】拖到此窗口，然后按 Enter 开始：找到 104 张图片，正在生成 PDF ...
+✅ 生成成功！
+   输出文件：C:\...\PDF_Output\002_第2集.pdf
+   页数（图片数）：104
+--------------------------------------------------
+请把【图片文件夹】拖到此窗口，然后按 Enter 开始：   ← 窗口未关，可继续拖入
+```
+
+- An invalid folder path is reported but does **not** interrupt the loop.
+- **Exit options:** type `exit` / `quit` / `q` and press Enter, press `Ctrl+C`, or just close the window.
 
 ### Configure the output directory / 修改输出目录
 

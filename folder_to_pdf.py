@@ -8,6 +8,9 @@
   3. 脚本自动收集该文件夹（仅顶层，不含子文件夹）的图片，按文件名自然排序，
      然后调用 IrfanView 的 /multipdf 生成一个多页 PDF，保存到 OUTPUT_DIR。
 
+处理完成后窗口不会关闭，可继续把其他文件夹拖进窗口继续工作；
+输入 exit/quit/q 或直接关闭窗口即退出。
+
 修改输出目录：编辑下方 OUTPUT_DIR 常量即可。
 依赖：Windows + 已安装 IrfanView 64（含 PDF 插件）+ Python 3。
 """
