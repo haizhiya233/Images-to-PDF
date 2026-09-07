@@ -163,23 +163,24 @@ def build_multipdf_cmd(irfan, output_pdf, image_paths):
     return cmd, tmp_path
 
 
-def main():
-    print("=" * 50)
-    print("图片合并成 PDF 工具")
-    print("=" * 50)
-    print("请把【图片文件夹】拖到此窗口，然后按 Enter 开始：")
-    raw = input().strip().strip('"')
+def prompt_folder():
+    """提示并读取拖入的文件夹路径，支持 exit/quit/q/空输入退出。返回路径字符串或 None。"""
+    raw = input("请把【图片文件夹】拖到此窗口，然后按 Enter 开始：").strip().strip('"')
     if not raw:
-        print("未输入路径，退出。")
-        input("\n按 Enter 退出...")
-        return
+        return None
+    if raw.lower() in ("exit", "quit", "q"):
+        return None
+    return raw
 
+
+def convert_folder(raw):
+    """把单个文件夹转成 PDF。成功或失败都会打印结果，不抛出未捕获异常。"""
     folder = Path(raw)
     try:
-        if not folder.is_dir():
-            raise ValueError(f"路径不是文件夹：{folder}")
         if not folder.exists():
             raise ValueError(f"文件夹不存在：{folder}")
+        if not folder.is_dir():
+            raise ValueError(f"路径不是文件夹：{folder}")
 
         images = collect_images(folder)
         print(f"找到 {len(images)} 张图片，正在生成 PDF ...")
@@ -221,7 +222,27 @@ def main():
     except Exception as e:
         print(f"\n❌ 出错了：{e}")
 
-    input("\n按 Enter 退出...")
+
+def main():
+    print("=" * 50)
+    print("图片合并成 PDF 工具")
+    print("=" * 50)
+    print("处理完成后窗口不会关闭，可继续拖入其他文件夹。")
+    print("输入 exit 或直接关闭窗口即可退出。")
+
+    while True:
+        try:
+            print("-" * 50)
+            raw = prompt_folder()
+            if raw is None:
+                print("已退出。")
+                break
+            convert_folder(raw)
+        except KeyboardInterrupt:
+            print("\n已退出。")
+            break
+        except Exception as e:
+            print(f"\n❌ 出错：{e}")
 
 
 if __name__ == "__main__":
