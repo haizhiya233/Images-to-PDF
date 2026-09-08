@@ -1,15 +1,15 @@
 # PROJECT KNOWLEDGE BASE
 
 **Generated:** 2026-09-08
-**Commit:** 0e9bafe
-**Branch:** portable-irfanview
+**Commit:** ef4637b
+**Branch:** main
 
 ## OVERVIEW
 Python CLI tool that merges an image folder into a multi-page PDF by shelling out to IrfanView's `/multipdf`. Stdlib-only. Portable mode auto-downloads IrfanView-64 into a local cache (no pre-install needed). Windows-only runtime.
 
 ## STRUCTURE
 ```
-图片转PDF/
+Images-to-PDF/
 ├── folder_to_pdf.py        # core app: all logic + console loop
 ├── launcher.py             # portable launcher: download/extract IrfanView cache
 ├── test_folder_to_pdf.py   # unittest suite (18 tests)
@@ -38,20 +38,23 @@ Single flat module — no packages, no subdirectories.
 ## CODE MAP
 | Symbol | Type | Location | Refs | Role |
 |--------|------|----------|------|------|
-| `main` | func | folder_to_pdf.py:274 | - | console loop |
-| `convert_folder` | func | folder_to_pdf.py:232 | 1 | single/batch dispatcher |
-| `convert_single_folder` | func | folder_to_pdf.py:183 | 1 | per-folder conversion |
-| `subfolders_with_images` | func | folder_to_pdf.py:222 | 1 | batch subdir detection |
-| `collect_images` | func | folder_to_pdf.py:123 | 1 | image gather + sort |
-| `build_multipdf_cmd` | func | folder_to_pdf.py:137 | 1 | shell command build |
-| `resolve_irfanview` | func | folder_to_pdf.py:49 | 1 | IrfanView detection (override-aware) |
-| `set_irfanview_override` | func | folder_to_pdf.py:55 | - | portable path injection |
-| `check_pdf_plugin` | func | folder_to_pdf.py:112 | 1 | PDF.dll check |
+| `main` | func | folder_to_pdf.py:289 | - | console loop; `--irfanview-path`/folder args |
+| `convert_folder` | func | folder_to_pdf.py:247 | 1 | single/batch dispatcher |
+| `convert_single_folder` | func | folder_to_pdf.py:198 | 1 | per-folder conversion |
+| `subfolders_with_images` | func | folder_to_pdf.py:237 | 1 | batch subdir detection |
+| `collect_images` | func | folder_to_pdf.py:138 | 1 | image gather + sort |
+| `build_multipdf_cmd` | func | folder_to_pdf.py:152 | 1 | shell command build |
+| `resolve_irfanview` | func | folder_to_pdf.py:59 | 1 | IrfanView detection (override-aware) |
+| `set_irfanview_override` | func | folder_to_pdf.py:53 | - | portable path injection |
+| `check_pdf_plugin` | func | folder_to_pdf.py:127 | 1 | PDF.dll check |
 | `natural_key` | func | folder_to_pdf.py:41 | 2 | natural sort key |
-| `prompt_folder` | func | folder_to_pdf.py:173 | 1 | input prompt + exit |
-| `ensure_irfanview` | func | launcher.py:51 | - | download/extract cached IrfanView |
-| `_fetch` | func | launcher.py:104 | 1 | download with UA/Referer |
-| `_relocate_plugin_dlls` | func | launcher.py:141 | 1 | move root DLLs into Plugins/ |
+| `prompt_folder` | func | folder_to_pdf.py:188 | 1 | input prompt + exit |
+| `ensure_irfanview` | func | launcher.py:58 | - | download/extract cached IrfanView |
+| `cleanup_cache` | func | launcher.py:49 | - | purge cache dir |
+| `run_main` | func | launcher.py:191 | 1 | launch folder_to_pdf with portable exe |
+| `_download_verified` | func | launcher.py:111 | 1 | download + SHA-256 + midpage handling |
+| `_fetch` | func | launcher.py:136 | 1 | download with UA/Referer |
+| `_relocate_plugin_dlls` | func | launcher.py:175 | 1 | move root DLLs into Plugins/ |
 
 ## CONVENTIONS
 - Single-file app; NO packages/subpackages. All functions top-level in `folder_to_pdf.py`.
@@ -104,7 +107,5 @@ python launcher.py --cleanup
 - Production runs on Windows calling the IrfanView exe; the WSL/Linux host can only compile-check and unit-test (no IrfanView, no `mbcs`, no `winreg`). The launcher's download/extract/relocate logic IS verifiable on Linux (~/.local/share cache).
 - **Anti-bot trap in launcher.py:** the official `irfanview.info` `/files/*.zip` URLs first return an HTML "Click again to start Download" page, not the ZIP. `_fetch` re-requests with a `Referer` header to get the real file.
 - **DLL relocation:** the plugins ZIP puts `PDF.dll` at the zip root; `_relocate_plugin_dlls` moves root-level `.dll` files into `Plugins/` so IrfanView finds them.
-- Unit tests import the script via `importlib` from a relative path and run on Linux — keep test logic host-agnostic.
-- Blast radius is small (single-file; most functions have 1 caller). Verify `convert_folder` and `build_multipdf_cmd` before editing — they carry the trickiest behavior.
 - Unit tests import the script via `importlib` from a relative path and run on Linux — keep test logic host-agnostic.
 - Blast radius is small (single-file; most functions have 1 caller). Verify `convert_folder` and `build_multipdf_cmd` before editing — they carry the trickiest behavior.
