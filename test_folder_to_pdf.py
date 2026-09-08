@@ -24,6 +24,7 @@ natural_key = folder_to_pdf.natural_key
 collect_images = folder_to_pdf.collect_images
 build_multipdf_cmd = folder_to_pdf.build_multipdf_cmd
 subfolders_with_images = folder_to_pdf.subfolders_with_images
+set_irfanview_override = folder_to_pdf.set_irfanview_override
 IMAGE_EXTS = folder_to_pdf.IMAGE_EXTS
 
 
@@ -174,6 +175,36 @@ class TestSubfoldersWithImages(unittest.TestCase):
         (self.folder / "a").mkdir()
         (self.folder / "a" / "x.txt").write_bytes(b"x")
         self.assertEqual(subfolders_with_images(self.folder), [])
+
+
+class TestIrfanviewOverride(unittest.TestCase):
+    """便携版覆盖：set_irfanview_override 让 resolve_irfanview 优先返回指定路径。"""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.fake_exe = Path(self.tmp.name) / "i_view64.exe"
+        self.fake_exe.write_bytes(b"fake")
+
+    def tearDown(self):
+        set_irfanview_override(None)
+        self.tmp.cleanup()
+
+    def test_override_returns_fake_exe(self):
+        set_irfanview_override(str(self.fake_exe))
+        self.assertEqual(folder_to_pdf.resolve_irfanview(), self.fake_exe)
+
+    def test_clear_override_falls_back_to_normal(self):
+        set_irfanview_override(str(self.fake_exe))
+        set_irfanview_override(None)
+        # 清除后再调会走正常探测，应因找不到 IrfanView 抛 RuntimeError（WSL 无 IrfanView）
+        with self.assertRaises(RuntimeError):
+            folder_to_pdf.resolve_irfanview()
+
+    def test_override_nonexistent_is_ignored(self):
+        set_irfanview_override(str(Path(self.tmp.name) / "nope.exe"))
+        # 不存在时不应返回，走正常探测抛 RuntimeError
+        with self.assertRaises(RuntimeError):
+            folder_to_pdf.resolve_irfanview()
 
 
 if __name__ == "__main__":

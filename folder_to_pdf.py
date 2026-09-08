@@ -46,19 +46,34 @@ def natural_key(name):
     ]
 
 
+# 便携版：允许外部通过 --irfanview-path 指定 IrfanView 路径（launcher.py 调用）
+_irfanview_override = None
+
+
+def set_irfanview_override(path):
+    """外部设置 IrfanView 可执行文件的偏好路径（便携版用），可传 None 清除。"""
+    global _irfanview_override
+    _irfanview_override = str(path) if path else None
+
+
 def resolve_irfanview():
     """定位 i_view64.exe（或 i_view32.exe），返回 Path，找不到则抛 RuntimeError。
 
     按顺序尝试：
+      0. 外部通过 set_irfanview_override 指定的路径（便携版用）
       1. Powershell 解析桌面快捷方式 IrfanView 64.lnk 的目标路径
       2. C:\\Program Files\\IrfanView\\i_view64.exe
       3. C:\\Program Files (x86)\\IrfanView\\i_view32.exe
       4. shutil.which("i_view64.exe") / ("i_view32.exe")
       5. 注册表 HKCU\\Software\\IrfanView 的 InstallDir
     """
-    exe_name = "i_view64.exe"
+    if _irfanview_override:
+        p = Path(_irfanview_override)
+        if p.exists():
+            return p
 
-    # 1. 解析 .lnk（最可靠，你的 IrfanView 装在非标准位置）
+    exe_name = "i_view64.exe"
+    # 1. 解析 .lnk（最可靠，IrfanView 可能装在非标准位置）
     lnk = Path(r"C:\Users\Public\Desktop\IrfanView 64.lnk")
     if lnk.exists():
         try:
@@ -272,6 +287,15 @@ def convert_folder(raw):
 
 
 def main():
+    import argparse
+    parser = argparse.ArgumentParser(description="图片合并成 PDF 工具（基于 IrfanView）")
+    parser.add_argument("--irfanview-path", help="指定 i_view64.exe 路径（便携版由 launcher 传入）")
+    parser.add_argument("folder", nargs="?", help="可直接传入文件夹路径，跳过多选提示")
+    args = parser.parse_args()
+
+    if args.irfanview_path:
+        set_irfanview_override(args.irfanview_path)
+
     print("=" * 50)
     print("图片合并成 PDF 工具")
     print("=" * 50)
@@ -281,10 +305,15 @@ def main():
     while True:
         try:
             print("-" * 50)
-            raw = prompt_folder()
-            if raw is None:
-                print("已退出。")
-                break
+            if args.folder:
+                raw = args.folder
+                args.folder = None
+                print(f"开始处理：{raw}")
+            else:
+                raw = prompt_folder()
+                if raw is None:
+                    print("已退出。")
+                    break
             convert_folder(raw)
         except KeyboardInterrupt:
             print("\n已退出。")

@@ -45,6 +45,26 @@ git clone https://github.com/haizhiya233/Images-to-PDF.git
 cd Images-to-PDF
 ```
 
+### Portable mode (no IrfanView install needed) / 便携模式（免安装 IrfanView）
+
+Use `launcher.py` instead of `folder_to_pdf.py` to run **without pre-installing IrfanView**. It auto-downloads the official IrfanView-64 portable package + PDF plugin from `irfanview.info` into a local cache, verifies/extracts it, then runs the main script:
+
+```bat
+:: one-shot: download (if needed) & run
+python launcher.py
+
+:: force re-download of the latest version
+python launcher.py --update
+
+:: only download/extract the cache, don't run
+python launcher.py --download-only
+```
+
+- **Cache location:** `%LOCALAPPDATA%\Images-to-PDF\irfanview\` (Windows) or `~/.local/share/images-to-pdf/irfanview/` (WSL/Linux).
+- Downloads only from the **official** `irfanview.info` domain — no redistribution, EULA-friendly. SHA-256 verified by default (pass `--no-verify` if you repin a new version).
+- First run needs internet; later runs are offline-ready once cached.
+- Requires installed IrfanView? No — `launcher.py` uses the cache. `folder_to_pdf.py` (only) still probes the machine for an installed IrfanView.
+
 ## Usage / 使用方法
 
 **Windows:** double-click `folder_to_pdf.py` (or run it from a terminal), drag your image folder into the console, and press **Enter**.
