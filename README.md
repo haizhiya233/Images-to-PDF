@@ -58,11 +58,18 @@ python launcher.py --update
 
 :: only download/extract the cache, don't run
 python launcher.py --download-only
+
+:: keep the cache (don't auto-clean on exit)
+python launcher.py --keep-cache
+
+:: clear the cache and exit
+python launcher.py --cleanup
 ```
 
-- **Cache location:** `%LOCALAPPDATA%\Images-to-PDF\irfanview\` (Windows) or `~/.local/share/images-to-pdf/irfanview/` (WSL/Linux).
+- **Cache location (temporary, auto-cleaned):** `%TEMP%\Images-to-PDF\irfanview\` (Windows) or `~/.local/share/images-to-pdf/irfanview/` (WSL/Linux).
+- **Auto-cleanup:** the cache is **deleted when the launcher exits** (close window / exit / shutdown) — it does not permanently occupy disk. Pass `--keep-cache` to retain it, or `--cleanup` to purge it on demand.
 - Downloads only from the **official** `irfanview.info` domain — no redistribution, EULA-friendly. SHA-256 verified by default (pass `--no-verify` if you repin a new version).
-- First run needs internet; later runs are offline-ready once cached.
+- First run needs internet; each fresh run re-downloads the ~30 MB package because cache is ephemeral by design.
 - Requires installed IrfanView? No — `launcher.py` uses the cache. `folder_to_pdf.py` (only) still probes the machine for an installed IrfanView.
 
 ## Usage / 使用方法

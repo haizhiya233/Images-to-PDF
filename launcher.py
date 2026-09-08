@@ -35,11 +35,24 @@ EXE_NAME = "i_view64.exe"
 
 
 def cache_dir():
-    """返回缓存根目录。Windows 用 LOCALAPPDATA，其他平台用 ~/.local/share。"""
-    base = os.environ.get("LOCALAPPDATA")
+    """返回缓存根目录：优先系统临时目录（%TEMP%），语义即"用完即弃"。
+
+    Windows 关机/重启后 %TEMP% 缓存随会话清理，且 launcher 退出时会主动删除；
+    无 %TEMP% 时（WSL/Linux）回退 ~/.local/share（同样由退出清理逻辑删除）。
+    """
+    base = os.environ.get("TEMP") or os.environ.get("TMP")
     if base:
         return Path(base) / "Images-to-PDF" / "irfanview"
     return Path.home() / ".local" / "share" / "images-to-pdf" / "irfanview"
+
+
+def cleanup_cache():
+    """删除缓存目录（用完即清）。幂等：目录不存在时静默返回。"""
+    root = cache_dir()
+    if root.exists():
+        shutil.rmtree(root, ignore_errors=True)
+        print(f"[便携版] 缓存已清理：{root}")
+    return root
 
 
 def ensure_irfanview(version=DEFAULT_VERSION, update=False, download_only=False, no_verify=False):
@@ -193,22 +206,37 @@ def main():
     parser.add_argument("--download-only", action="store_true", help="只下载/更新缓存，不运行主脚本")
     parser.add_argument("--no-verify", action="store_true",
                         help="跳过 SHA-256 校验（官方域名可信；版本更新哈希变化时用）")
+    parser.add_argument("--keep-cache", action="store_true",
+                        help="保留缓存不清理（默认退出时自动删除，不占磁盘）")
+    parser.add_argument("--cleanup", action="store_true", help="只清理缓存并退出")
     parser.add_argument("extra", nargs="*", help="透传给主脚本的参数")
     args = parser.parse_args()
 
-    try:
-        irfan = ensure_irfanview(version=args.version, update=args.update,
-                                 download_only=args.download_only, no_verify=args.no_verify)
-    except Exception as e:
-        print(f"[便携版] ❌ 初始化失败：{e}")
-        print("       请检查网络，或手动安装 IrfanView 后直接运行 folder_to_pdf.py。")
-        sys.exit(1)
-
-    if args.download_only:
-        print(f"[便携版] 下载完成：{irfan}")
+    # 独立清理请求
+    if args.cleanup:
+        cleanup_cache()
         sys.exit(0)
 
-    sys.exit(run_main(irfan, args.extra))
+    exit_code = 0
+    try:
+        try:
+            irfan = ensure_irfanview(version=args.version, update=args.update,
+                                     download_only=args.download_only, no_verify=args.no_verify)
+        except Exception as e:
+            print(f"[便携版] ❌ 初始化失败：{e}")
+            print("       请检查网络，或手动安装 IrfanView 后直接运行 folder_to_pdf.py。")
+            exit_code = 1
+        else:
+            if args.download_only:
+                print(f"[便携版] 下载完成：{irfan}")
+            else:
+                exit_code = run_main(irfan, args.extra)
+    finally:
+        # 用完即清：默认退出（含异常/关窗/关机）时删除缓存，不占磁盘
+        if not args.keep_cache:
+            cleanup_cache()
+
+    sys.exit(exit_code)
 
 
 if __name__ == "__main__":

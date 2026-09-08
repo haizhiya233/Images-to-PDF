@@ -71,7 +71,7 @@ Single flat module — no packages, no subdirectories.
 - Filelist fallback: `build_multipdf_cmd` switches to a `filelist=` temp file when the CLI exceeds 3800 chars. Written in ANSI (`mbcs`) encoding for Chinese-path compat (with a `LookupError` fallback to system default on non-Windows hosts for tests).
 - Natural sort implemented via inline regex split (no natsort dep).
 - IrfanView located by resolving desktop `.lnk` first (user's install is non-standard: `D:\电脑应用\IrfanView`).
-- Portable mode downloads official IrfanView-64 from `irfanview.info` (NOT redistributed; EULA-friendly), caches under `%LOCALAPPDATA%\Images-to-PDF\irfanview\`.
+- Portable mode downloads official IrfanView-64 from `irfanview.info` (NOT redistributed; EULA-friendly), caches under `%TEMP%\Images-to-PDF\irfanview\` and auto-deletes it on exit (try/finally in `main()`) so it never permanently occupies disk. `--keep-cache` disables the cleanup; `--cleanup` purges on demand.
 
 ## COMMANDS
 ```bash
@@ -89,6 +89,12 @@ python launcher.py --update
 
 # download/extract only, don't run
 python launcher.py --download-only
+
+# keep cache after exit (default auto-cleans)
+python launcher.py --keep-cache
+
+# purge cache now
+python launcher.py --cleanup
 
 # manual run (Windows)
 # double-click folder_to_pdf.py, drop a folder in, press Enter
