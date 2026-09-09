@@ -26,9 +26,12 @@ import os
 import re
 import tempfile
 import shutil
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import threading
 
 # ================= 用户可修改区 =================
 OUTPUT_DIR = Path(r"C:\Users\31657\Desktop\PDF_Output")  # 用户在此修改输出目录
+MAX_WORKERS = 4  # 批量处理时的并行线程数
 # ===============================================
 
 # 支持的图片扩展名（小写，忽略大小写）
@@ -36,6 +39,17 @@ IMAGE_EXTS = {
     ".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff",
     ".gif", ".webp", ".jfif", ".avif", ".heic",
 }
+
+# 全局 IrfanView 路径缓存（避免重复探测）
+_irfanview_cache = None
+_irfanview_lock = threading.Lock()
+_irfanview_override = None
+
+
+def set_irfanview_override(path):
+    """外部设置 IrfanView 可执行文件的偏好路径（便携版用），可传 None 清除。"""
+    global _irfanview_override
+    _irfanview_override = str(path) if path else None
 
 
 def natural_key(name):
@@ -46,82 +60,95 @@ def natural_key(name):
     ]
 
 
-# 便携版：允许外部通过 --irfanview-path 指定 IrfanView 路径（launcher.py 调用）
-_irfanview_override = None
-
-
-def set_irfanview_override(path):
-    """外部设置 IrfanView 可执行文件的偏好路径（便携版用），可传 None 清除。"""
-    global _irfanview_override
-    _irfanview_override = str(path) if path else None
-
-
 def resolve_irfanview():
     """定位 i_view64.exe（或 i_view32.exe），返回 Path，找不到则抛 RuntimeError。
+    
+    首次调用会探测并缓存结果，后续调用直接返回缓存，避免重复的注册表查询和 PowerShell 调用。
 
     按顺序尝试：
-      0. 外部通过 set_irfanview_override 指定的路径（便携版用）
+      0. 外部通过 set_irfanview_override 指定的路径（便��版用）
       1. Powershell 解析桌面快捷方式 IrfanView 64.lnk 的目标路径
       2. C:\\Program Files\\IrfanView\\i_view64.exe
       3. C:\\Program Files (x86)\\IrfanView\\i_view32.exe
       4. shutil.which("i_view64.exe") / ("i_view32.exe")
       5. 注册表 HKCU\\Software\\IrfanView 的 InstallDir
     """
-    if _irfanview_override:
-        p = Path(_irfanview_override)
-        if p.exists():
-            return p
-
-    exe_name = "i_view64.exe"
-    # 1. 解析 .lnk（最可靠，IrfanView 可能装在非标准位置）
-    lnk = Path(r"C:\Users\Public\Desktop\IrfanView 64.lnk")
-    if lnk.exists():
+    global _irfanview_cache
+    
+    # 检查缓存（快速路径，无锁）
+    if _irfanview_cache is not None:
+        return _irfanview_cache
+    
+    # 线程安全的初始化
+    with _irfanview_lock:
+        # 再次检查（防止多线程间的竞态）
+        if _irfanview_cache is not None:
+            return _irfanview_cache
+        
+        # 外部覆盖优先（便携版）
+        if _irfanview_override:
+            p = Path(_irfanview_override)
+            if p.exists():
+                _irfanview_cache = p
+                return p
+        
+        exe_name = "i_view64.exe"
+        
+        # 1. 解析 .lnk（最可靠，IrfanView 可能装在非标准位置）
+        lnk = Path(r"C:\Users\Public\Desktop\IrfanView 64.lnk")
+        if lnk.exists():
+            try:
+                ps = (
+                    "$s=(New-Object -ComObject WScript.Shell).CreateShortcut('"
+                    + str(lnk) + "'); $s.TargetPath"
+                )
+                res = subprocess.run(
+                    ["powershell", "-NoProfile", "-Command", ps],
+                    capture_output=True, text=True, timeout=15,
+                )
+                target = res.stdout.strip()
+                if target:
+                    p = Path(target)
+                    if p.exists():
+                        _irfanview_cache = p
+                        return p
+            except Exception:
+                pass
+        
+        # 2. 3. 常见安装目录
+        for cand in [
+            Path(r"C:\Program Files\IrfanView\i_view64.exe"),
+            Path(r"C:\Program Files (x86)\IrfanView\i_view32.exe"),
+        ]:
+            if cand.exists():
+                _irfanview_cache = cand
+                return cand
+        
+        # 4. PATH
+        import shutil
+        for name in ("i_view64.exe", "i_view32.exe"):
+            found = shutil.which(name)
+            if found:
+                p = Path(found)
+                _irfanview_cache = p
+                return p
+        
+        # 5. 注册表
         try:
-            ps = (
-                "$s=(New-Object -ComObject WScript.Shell).CreateShortcut('"
-                + str(lnk) + "'); $s.TargetPath"
-            )
-            res = subprocess.run(
-                ["powershell", "-NoProfile", "-Command", ps],
-                capture_output=True, text=True, timeout=15,
-            )
-            target = res.stdout.strip()
-            if target:
-                p = Path(target)
-                if p.exists():
-                    return p
+            import winreg
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\IrfanView") as k:
+                install_dir = winreg.QueryValueEx(k, "InstallDir")[0]
+            p = Path(install_dir) / exe_name
+            if p.exists():
+                _irfanview_cache = p
+                return p
         except Exception:
             pass
-
-    # 2. 3. 常见安装目录
-    for cand in [
-        Path(r"C:\Program Files\IrfanView\i_view64.exe"),
-        Path(r"C:\Program Files (x86)\IrfanView\i_view32.exe"),
-    ]:
-        if cand.exists():
-            return cand
-
-    # 4. PATH
-    for name in ("i_view64.exe", "i_view32.exe"):
-        found = shutil.which(name)
-        if found:
-            return Path(found)
-
-    # 5. 注册表
-    try:
-        import winreg
-        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\IrfanView") as k:
-            install_dir = winreg.QueryValueEx(k, "InstallDir")[0]
-        p = Path(install_dir) / exe_name
-        if p.exists():
-            return p
-    except Exception:
-        pass
-
-    raise RuntimeError(
-        "找不到 IrfanView！请确认已安装 IrfanView 64（含 PDF 插件）。\n"
-        "可尝试手动指定路径：修改 resolve_irfanview() 直接返回 Path(r'完整路径\\i_view64.exe')。"
-    )
+        
+        raise RuntimeError(
+            "找不到 IrfanView！请确认已安装 IrfanView 64（含 PDF 插件）。\n"
+            "可尝试手动指定路径：修改 resolve_irfanview() 直接返回 Path(r'完整路径\\i_view64.exe')。"
+        )
 
 
 def check_pdf_plugin(irfan_dir):
@@ -244,6 +271,46 @@ def subfolders_with_images(folder):
     return subs
 
 
+def convert_folder_batch(folder, irfan):
+    """批量模式：并行处理所有子文件夹，带进度条。"""
+    subdirs = subfolders_with_images(folder)
+    if not subdirs:
+        return
+    
+    print(f"\n检测到 {len(subdirs)} 个子文件夹，开始批量处理 ...")
+    
+    # 简单进度条
+    ok, fail = 0, 0
+    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+        futures = {}
+        for i, sub in enumerate(subdirs, 1):
+            future = executor.submit(convert_single_folder, sub, irfan)
+            futures[future] = (i, sub.name, len(subdirs))
+        
+        for future in as_completed(futures):
+            idx, name, total = futures[future]
+            try:
+                result = future.result()
+                if result:
+                    ok += 1
+                    status = "✅"
+                else:
+                    fail += 1
+                    status = "❌"
+            except Exception as e:
+                fail += 1
+                status = "❌"
+                print(f"   ❌ 该子文件夹转换失败：{e}")
+            
+            # 显示进度条
+            progress = f"[{ok + fail}/{total}]"
+            print(f"\r{progress} {status} {name:<30}", end="", flush=True)
+        
+        print()  # 换行
+    
+    print(f"\n批量处理完成：成功 {ok} 个，失败 {fail} 个。")
+
+
 def convert_folder(raw):
     """把文件夹转成 PDF。
 
@@ -259,27 +326,17 @@ def convert_folder(raw):
         if not folder.is_dir():
             raise ValueError(f"路径不是文件夹：{folder}")
 
-        subdirs = subfolders_with_images(folder)
-        if subdirs:
-            irfan = resolve_irfanview()
-            print(f"IrfanView: {irfan}")
-            check_pdf_plugin(irfan.parent)
-            print(f"\n检测到 {len(subdirs)} 个子文件夹，开始批量处理 ...")
-            ok, fail = 0, 0
-            for i, sub in enumerate(subdirs, 1):
-                print(f"\n[{i}/{len(subdirs)}] {sub.name} ...")
-                try:
-                    convert_single_folder(sub, irfan)
-                    ok += 1
-                except Exception as e:
-                    print(f"   ❌ 该子文件夹转换失败：{e}")
-                    fail += 1
-            print(f"\n批量处理完成：成功 {ok} 个，失败 {fail} 个。")
-            return
-
+        # 只探测一次 IrfanView（后续调用直接返回缓存）
         irfan = resolve_irfanview()
         print(f"IrfanView: {irfan}")
         check_pdf_plugin(irfan.parent)
+
+        subdirs = subfolders_with_images(folder)
+        if subdirs:
+            convert_folder_batch(folder, irfan)
+            return
+
+        # 单个文件夹模式
         convert_single_folder(folder, irfan)
 
     except Exception as e:
