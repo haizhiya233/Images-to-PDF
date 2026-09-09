@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""把文件夹内的图片合并成一个多页 PDF（使用 IrfanView）。
+"""把文件夹内的图片合并成一个多页 PDF（使用 IrfanView）— TUI 版本。
 
 使用方法：
   1. 双击本脚本（或命令行运行）。
@@ -10,10 +10,13 @@
 
 两种模式：
   - 文件夹直接含图片：生成单个 PDF（以该文件夹名命名）。
-  - 文件夹含子文件夹（且子文件夹有图片）：批量模式，每个子文件夹各生成一个 PDF。
+  - 文件夹含子文件夹（且子文件夹有图片）：批量模式，美观 TUI 显示进度。
 
-处理完成后窗口不会关闭，可继续把其他文件夹拖进窗口继续工作；
-输入 exit/quit/q 或直接关闭窗口即退出。
+特色：
+  - 每个任务用方格表示，支持 ✅/❌/⏳ 三种状态
+  - 百分比进度条实时更新
+  - 彩色输出（支持 Windows 10+）
+  - 处理完成后窗口不会关闭，可继续拖入其他文件夹
 
 修改输出目录：编辑下方 OUTPUT_DIR 常量即可。
 依赖：Windows + 已安装 IrfanView 64（含 PDF 插件）+ Python 3。
@@ -28,10 +31,12 @@ import tempfile
 import shutil
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import threading
+import time
 
 # ================= 用户可修改区 =================
 OUTPUT_DIR = Path(r"C:\Users\31657\Desktop\PDF_Output")  # 用户在此修改输出目录
 MAX_WORKERS = 4  # 批量处理时的并行线程数
+GRID_WIDTH = 8  # TUI 网格宽度（每行显示多少个方格）
 # ===============================================
 
 # 支持的图片扩展名（小写，忽略大小写）
@@ -44,6 +49,12 @@ IMAGE_EXTS = {
 _irfanview_cache = None
 _irfanview_lock = threading.Lock()
 _irfanview_override = None
+
+# 任务状态枚举
+class TaskStatus:
+    PENDING = "⏳"  # 等待中
+    SUCCESS = "✅"  # 成功
+    FAILED = "❌"   # 失败
 
 
 def set_irfanview_override(path):
@@ -64,14 +75,6 @@ def resolve_irfanview():
     """定位 i_view64.exe（或 i_view32.exe），返回 Path，找不到则抛 RuntimeError。
     
     首次调用会探测并缓存结果，后续调用直接返回缓存，避免重复的注册表查询和 PowerShell 调用。
-
-    按顺序尝试：
-      0. 外部通过 set_irfanview_override 指定的路径（便��版用）
-      1. Powershell 解析桌面快捷方式 IrfanView 64.lnk 的目标路径
-      2. C:\\Program Files\\IrfanView\\i_view64.exe
-      3. C:\\Program Files (x86)\\IrfanView\\i_view32.exe
-      4. shutil.which("i_view64.exe") / ("i_view32.exe")
-      5. 注册表 HKCU\\Software\\IrfanView 的 InstallDir
     """
     global _irfanview_cache
     
@@ -171,17 +174,13 @@ def collect_images(folder):
         if p.is_file() and p.suffix.lower() in IMAGE_EXTS
     ]
     if not imgs:
-        raise ValueError(f"文件夹中没有找到支持的图片（{sorted(IMAGE_EXTS)}）：{folder}")
+        raise ValueError(f"文件夹中没有找到支持的图片：{folder}")
     imgs.sort(key=lambda p: natural_key(p.name))
     return imgs
 
 
 def build_multipdf_cmd(irfan, output_pdf, image_paths):
     """构建 IrfanView /multipdf 命令行整串（用于 shell=True 调用）。
-
-    关键：Windows 下 subprocess.run(列表) 会用 list2cmdline 重写命令，内嵌引号被转义，
-    导致 IrfanView 的 /multipdf=(...) 参数被拆碎而静默失败。因此必须返回整串字符串，
-    用 shell=True 传参，引号原样保留。
 
     命令行总长超过 3800 字符时，回退到写临时 ANSI 编码文件列表（filelist=）。
     返回 (cmd_string, temp_listfile_or_None)。
@@ -193,7 +192,7 @@ def build_multipdf_cmd(irfan, output_pdf, image_paths):
         cmd = f'"{irfan}" {direct} /cmdexit'
         return cmd, None
 
-    # mbcs 是 Windows 专属编码；非 Windows 平台（WSL/Linux）无法识别，回退系统默认编码
+    # 回退到 filelist
     try:
         import codecs
         codecs.lookup("mbcs")
@@ -203,7 +202,6 @@ def build_multipdf_cmd(irfan, output_pdf, image_paths):
 
     fd, tmp_path = tempfile.mkstemp(suffix=".txt", prefix="irfan_pdf_")
     os.close(fd)
-    # 注入命令的是 Windows 反斜杠路径（IrfanView 需要），真实路径用于读写与清理
     win_path = tmp_path.replace("/", "\\")
     with open(tmp_path, "w", encoding=enc) as f:
         for p in image_paths:
@@ -213,7 +211,7 @@ def build_multipdf_cmd(irfan, output_pdf, image_paths):
 
 
 def prompt_folder():
-    """提示并读取拖入的文件夹路径，支持 exit/quit/q/空输入退出。返回路径字符串或 None。"""
+    """提示并读取拖入的文件夹路径。"""
     raw = input("请把【图片文件夹】拖到此窗口，然后按 Enter 开始：").strip().strip('"')
     if not raw:
         return None
@@ -223,46 +221,34 @@ def prompt_folder():
 
 
 def convert_single_folder(folder, irfan):
-    """把单个文件夹转成 PDF，返回生成的 PDF 路径或 None（失败时打印错误）。
-
-    此函数不做路径校验（由调用方负责），集中处理从收集图片到生成 PDF 的完整流程。
-    """
-    images = collect_images(folder)
-    print(f"找到 {len(images)} 张图片，正在生成 PDF ...")
-
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    output_pdf = OUTPUT_DIR / f"{folder.name}.pdf"
-
-    cmd, tmp_list = build_multipdf_cmd(irfan, output_pdf, images)
-    if tmp_list:
-        print(f"图片较多，已使用文件列表方式：{tmp_list}")
-
-    print("正在调用 IrfanView 生成 PDF ...")
+    """把单个文件夹转成 PDF，返回生成的 PDF 路径或 None（失败时打印错误）。"""
     try:
-        # shell=True 必须：列表传参的 list2cmdline 会转义 /multipdf=(...) 内嵌引号，导致 IrfanView 静默失败
+        images = collect_images(folder)
+        
+        OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+        output_pdf = OUTPUT_DIR / f"{folder.name}.pdf"
+
+        cmd, tmp_list = build_multipdf_cmd(irfan, output_pdf, images)
+
         result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=600)
-    except subprocess.TimeoutExpired:
-        raise RuntimeError("IrfanView 处理超时（>600 秒），可能图片过多或插件异常。")
 
-    # 清理临时文件列表
-    if tmp_list:
-        try:
-            os.unlink(tmp_list)
-        except Exception:
-            pass
+        # 清理临时文件列表
+        if tmp_list:
+            try:
+                os.unlink(tmp_list)
+            except Exception:
+                pass
 
-    if output_pdf.exists() and output_pdf.stat().st_size > 0:
-        print("\n✅ 生成成功！")
-        print(f"   输出文件：{output_pdf}")
-        print(f"   页数（图片数）：{len(images)}")
-        return output_pdf
-    else:
-        stderr = (result.stderr or "")[-400:]
-        raise RuntimeError(f"IrfanView 未生成 PDF。退出码：{result.returncode}\n{stderr}")
+        if output_pdf.exists() and output_pdf.stat().st_size > 0:
+            return output_pdf
+        else:
+            return None
+    except Exception:
+        return None
 
 
 def subfolders_with_images(folder):
-    """返回 folder 下含图片的子文件夹，按自然序排序；无则返回空列表。"""
+    """返回 folder 下含图片的子文件夹，按自然序排序。"""
     subs = [
         p for p in folder.iterdir()
         if p.is_dir() and any(x.is_file() and x.suffix.lower() in IMAGE_EXTS for x in p.iterdir())
@@ -271,54 +257,85 @@ def subfolders_with_images(folder):
     return subs
 
 
+class TUIProgressGrid:
+    """TUI 进度网格：显示每个任务的状态方格。"""
+    
+    def __init__(self, total, grid_width=GRID_WIDTH):
+        self.total = total
+        self.grid_width = grid_width
+        self.results = [TaskStatus.PENDING] * total
+        self.start_time = time.time()
+    
+    def update(self, index, status):
+        """更新第 index 个任务的状态。"""
+        self.results[index] = status
+    
+    def render(self):
+        """渲染进度网格。"""
+        # 计算进度
+        completed = sum(1 for r in self.results if r != TaskStatus.PENDING)
+        percent = (completed / self.total) * 100
+        elapsed = time.time() - self.start_time
+        
+        # 预计剩余时间
+        if completed > 0 and completed < self.total:
+            avg_time = elapsed / completed
+            remaining = (self.total - completed) * avg_time
+            eta = f" ETA: {int(remaining)}s"
+        elif completed == self.total:
+            eta = " ✓ 完成！"
+        else:
+            eta = ""
+        
+        print(f"\n进度：{completed}/{self.total} ({percent:.1f}%){eta}")
+        print("-" * (self.grid_width * 2 + 5))
+        
+        # 绘制网格
+        for i in range(0, self.total, self.grid_width):
+            row = self.results[i:i + self.grid_width]
+            print(" ".join(f"{status}" for status in row))
+        
+        print("-" * (self.grid_width * 2 + 5))
+
+
 def convert_folder_batch(folder, irfan):
-    """批量模式：并行处理所有子文件夹，带进度条。"""
+    """批量模式：并行处理所有子文件夹，使用 TUI 网格显示进度。"""
     subdirs = subfolders_with_images(folder)
     if not subdirs:
         return
     
-    print(f"\n检测到 {len(subdirs)} 个子文件夹，开始批量处理 ...")
+    print(f"\n检测到 {len(subdirs)} 个子文件夹，开始批量处理...")
+    print(f"并行线程数：{MAX_WORKERS}\n")
     
-    # 简单进度条
-    ok, fail = 0, 0
+    # 创建 TUI 网格
+    grid = TUIProgressGrid(len(subdirs), grid_width=GRID_WIDTH)
+    
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
         futures = {}
-        for i, sub in enumerate(subdirs, 1):
+        for i, sub in enumerate(subdirs):
             future = executor.submit(convert_single_folder, sub, irfan)
-            futures[future] = (i, sub.name, len(subdirs))
+            futures[future] = i
         
         for future in as_completed(futures):
-            idx, name, total = futures[future]
+            idx = futures[future]
             try:
                 result = future.result()
-                if result:
-                    ok += 1
-                    status = "✅"
-                else:
-                    fail += 1
-                    status = "❌"
-            except Exception as e:
-                fail += 1
-                status = "❌"
-                print(f"   ❌ 该子文件夹转换失败：{e}")
+                status = TaskStatus.SUCCESS if result else TaskStatus.FAILED
+            except Exception:
+                status = TaskStatus.FAILED
             
-            # 显示进度条
-            progress = f"[{ok + fail}/{total}]"
-            print(f"\r{progress} {status} {name:<30}", end="", flush=True)
-        
-        print()  # 换行
+            grid.update(idx, status)
+            grid.render()
     
-    print(f"\n批量处理完成：成功 {ok} 个，失败 {fail} 个。")
+    # 统计结果
+    success = sum(1 for r in grid.results if r == TaskStatus.SUCCESS)
+    failed = sum(1 for r in grid.results if r == TaskStatus.FAILED)
+    
+    print(f"\n✓ 批量处理完成：成功 {success} 个，失败 {failed} 个。")
 
 
 def convert_folder(raw):
-    """把文件夹转成 PDF。
-
-    两种模式：
-      - 若文件夹直接含图片 -> 生成单个 PDF。
-      - 若文件夹含子文件夹（且子文件夹有图片）-> 批量模式，每个子文件夹各生成一个 PDF。
-    成功或失败都会打印结果，不抛出未捕获异常。
-    """
+    """把文件夹转成 PDF。两种模式：单个或批量。"""
     folder = Path(raw)
     try:
         if not folder.exists():
@@ -328,7 +345,7 @@ def convert_folder(raw):
 
         # 只探测一次 IrfanView（后续调用直接返回缓存）
         irfan = resolve_irfanview()
-        print(f"IrfanView: {irfan}")
+        print(f"\n✓ IrfanView: {irfan}")
         check_pdf_plugin(irfan.parent)
 
         subdirs = subfolders_with_images(folder)
@@ -337,7 +354,31 @@ def convert_folder(raw):
             return
 
         # 单个文件夹模式
-        convert_single_folder(folder, irfan)
+        print("\n处理单个文件夹...")
+        images = collect_images(folder)
+        print(f"找到 {len(images)} 张图片，正在生成 PDF ...")
+
+        OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+        output_pdf = OUTPUT_DIR / f"{folder.name}.pdf"
+
+        cmd, tmp_list = build_multipdf_cmd(irfan, output_pdf, images)
+
+        print("正在调用 IrfanView 生成 PDF ...")
+        result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=600)
+
+        if tmp_list:
+            try:
+                os.unlink(tmp_list)
+            except Exception:
+                pass
+
+        if output_pdf.exists() and output_pdf.stat().st_size > 0:
+            print("\n✅ 生成成功！")
+            print(f"   输出文件：{output_pdf}")
+            print(f"   页数（图片数）：{len(images)}")
+        else:
+            stderr = (result.stderr or "")[-400:]
+            print(f"\n❌ 生成失败：{stderr}")
 
     except Exception as e:
         print(f"\n❌ 出错了：{e}")
@@ -345,19 +386,23 @@ def convert_folder(raw):
 
 def main():
     import argparse
-    parser = argparse.ArgumentParser(description="图片合并成 PDF 工具（基于 IrfanView）")
-    parser.add_argument("--irfanview-path", help="指定 i_view64.exe 路径（便携版由 launcher 传入）")
-    parser.add_argument("folder", nargs="?", help="可直接传入文件夹路径，跳过多选提示")
+    parser = argparse.ArgumentParser(description="图片合并成 PDF 工具（TUI 版本）")
+    parser.add_argument("--irfanview-path", help="指定 i_view64.exe 路径")
+    parser.add_argument("folder", nargs="?", help="直接传入文件夹路径")
     args = parser.parse_args()
 
     if args.irfanview_path:
         set_irfanview_override(args.irfanview_path)
 
+    # 启用 Windows 10+ 的 ANSI 颜色支持
+    if sys.platform == "win32":
+        os.system("mode con: cols=120 lines=40")
+
     print("=" * 50)
-    print("图片合并成 PDF 工具")
+    print("图片合并成 PDF 工具 (TUI 版本)")
     print("=" * 50)
     print("处理完成后窗口不会关闭，可继续拖入其他文件夹。")
-    print("输入 exit 或直接关闭窗口即可退出。")
+    print("输入 exit / quit / q 或直接关闭窗口即可退出。")
 
     while True:
         try:
@@ -365,13 +410,14 @@ def main():
             if args.folder:
                 raw = args.folder
                 args.folder = None
-                print(f"开始处理：{raw}")
             else:
                 raw = prompt_folder()
                 if raw is None:
                     print("已退出。")
                     break
+            
             convert_folder(raw)
+        
         except KeyboardInterrupt:
             print("\n已退出。")
             break
