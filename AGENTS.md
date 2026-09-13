@@ -3,13 +3,13 @@
 **Generated:** 2026-09-09  
 **Commit:** 89212209  
 **Branch:** main  
-**Version:** v2.0.0 (TUI + Performance Optimized)
+**Version:** v2.1.0 (Reliability + Security Hardening)
 
 ## OVERVIEW
 
 Python CLI tool that merges image folders into multi-page PDFs by shelling out to IrfanView's `/multipdf`. Stdlib-only. Features:
 - **Core:** Single image folder → single PDF; parent folder with subfolders → batch mode (one PDF per subfolder)
-- **Performance:** 4-thread parallel batch processing (3-4x faster), IrfanView path cached to memory (80x fewer detections)
+- **Performance:** 16-thread parallel batch processing by default (tunable), IrfanView path cached to memory (80x fewer detections)
 - **UX:** Beautiful TUI progress grid, real-time percentage (0-100%), ETA estimation
 - **Portable:** Auto-downloads official IrfanView-64 to `%TEMP%` cache (ephemeral, auto-cleaned on exit)
 
@@ -19,7 +19,7 @@ Python CLI tool that merges image folders into multi-page PDFs by shelling out t
 Images-to-PDF/
 ├── folder_to_pdf.py        # core app: TUI + parallel batch + caching
 ├── launcher.py             # portable launcher: download/extract IrfanView cache
-├── test_folder_to_pdf.py   # unittest suite (18 tests)
+├── test_folder_to_pdf.py   # unittest suite (21 tests)
 ├── README.md               # comprehensive usage docs (zh/en)
 ├── AGENTS.md               # this file
 └── LICENSE                 # MIT
@@ -33,7 +33,7 @@ Single flat module — no packages, no subdirectories.
 |------|----------|-------|
 | Entry point + loop | `folder_to_pdf.py:main()` | non-closing console loop; supports `--irfanview-path` |
 | Convert dispatch (single vs batch) | `convert_folder()` | auto-detects subdirs-with-images → single/batch mode |
-| **Batch parallel processing** | `convert_folder_batch()` | ThreadPoolExecutor(4), real-time TUI grid updates |
+| **Batch parallel processing** | `convert_folder_batch()` | ThreadPoolExecutor(MAX_WORKERS), real-time TUI grid updates |
 | **TUI progress grid** | `class TUIProgressGrid` | renders percentage, ETA, emoji grid (✅/❌/⏳) |
 | One subfolder → PDF | `convert_single_folder()` | core conversion, reused by batch, returns Path or None |
 | Batch detection | `subfolders_with_images()` | returns only image-bearing subdirs, natural-sorted |
@@ -166,7 +166,7 @@ class TaskStatus:
 - **NEVER remove the `shell=True`** on the `subprocess.run(cmd, ...)` call.
 - **NEVER remove the `_irfanview_lock`** in `resolve_irfanview()` — multiple threads may call it during batch; lock ensures first caller initializes cache, others wait.
 - Do NOT introduce third-party deps (natsort, Pillow, PyPDF2, tqdm) — stdlib only.
-- **NEVER hardcode a stale SHA-256** in launcher.py — official downloads return varying versions; repin to the actual value. Use `--no-verify` when repinning a new version.
+- **NEVER reuse a SHA-256 for another IrfanView version** — add the version to `VERSION_SHA256`, or require explicit `--no-verify`.
 
 ## UNIQUE STYLES & TRICKS
 
@@ -176,7 +176,7 @@ class TaskStatus:
 - Thread-safe via `threading.Lock`.
 
 ### Parallel + Real-Time TUI
-- `ThreadPoolExecutor(max_workers=4)` runs conversions concurrently.
+- `ThreadPoolExecutor(max_workers=MAX_WORKERS)` runs conversions concurrently.
 - `as_completed()` iterates tasks in completion order (not submission order).
 - Each completion updates `grid.results[idx]`, re-renders percentage + ETA + emoji grid.
 - No blocking; grid is refreshed in real-time as tasks finish.
@@ -256,7 +256,7 @@ Edit constants at top of `folder_to_pdf.py`:
 
 ```python
 OUTPUT_DIR = Path(r"C:\Users\YourName\Desktop\PDF_Output")  # Output directory (MUST change)
-MAX_WORKERS = 4                                             # Parallel threads (default: 4)
+MAX_WORKERS = 16                                            # Parallel threads (default: 16)
 GRID_WIDTH = 8                                              # Grid cells per row (default: 8)
 ```
 
@@ -272,12 +272,15 @@ GRID_WIDTH = 8                                              # Grid cells per row
 
 ## TEST COVERAGE
 
-18 unit tests in `test_folder_to_pdf.py`:
+21 unit tests in `test_folder_to_pdf.py`:
 - ✅ Natural sort logic (numeric, case-insensitive)
 - ✅ Image collection (top-level only, extension filtering, natural sort)
 - ✅ Command building (short list direct, long list filelist fallback)
 - ✅ Subfolder detection (batch mode, natural sort)
 - ✅ IrfanView override mechanism
+- ✅ Failed conversion cannot be mistaken for an old PDF
+- ✅ ZIP path traversal protection
+- ✅ Unknown launcher versions require explicit verification opt-out
 
 Run:
 ```bash

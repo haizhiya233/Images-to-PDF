@@ -26,9 +26,13 @@ from pathlib import Path
 DEFAULT_VERSION = "475"
 IVIEW_URL = "https://www.irfanview.info/files/iview{v}_x64.zip"
 PLUGINS_URL = "https://www.irfanview.info/files/iview{v}_plugins_x64.zip"
-# 官方 SHA-256（对应 475；若改版本需同步更新）
-IVIEW_SHA = "b657c6fcb3e758b28cda00c1ded32af97b1441ead522053b4930d7304f0506e7"
-PLUGINS_SHA = "37ab14c2280f5919043b2e30f481f657629978285bdbd138dcace60565c768bb"
+# 官方 SHA-256。新增版本时必须同步加入对应哈希；未知版本必须显式使用 --no-verify。
+VERSION_SHA256 = {
+    "475": (
+        "b657c6fcb3e758b28cda00c1ded32af97b1441ead522053b4930d7304f0506e7",
+        "37ab14c2280f5919043b2e30f481f657629978285bdbd138dcace60565c768bb",
+    ),
+}
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 EXE_NAME = "i_view64.exe"
@@ -70,9 +74,17 @@ def ensure_irfanview(version=DEFAULT_VERSION, update=False, download_only=False,
     zip_main = root / f"iview{version}_x64.zip"
     zip_plugins = root / f"iview{version}_plugins_x64.zip"
 
+    hashes = VERSION_SHA256.get(str(version))
+    if hashes is None and not no_verify:
+        raise ValueError(
+            f"版本 {version} 没有登记 SHA-256。请先更新 VERSION_SHA256，"
+            "或明确使用 --no-verify。"
+        )
+    main_sha, plugins_sha = hashes or (None, None)
+
     try:
-        _download_verified(IVIEW_URL.format(v=version), zip_main, IVIEW_SHA, no_verify)
-        _download_verified(PLUGINS_URL.format(v=version), zip_plugins, PLUGINS_SHA, no_verify)
+        _download_verified(IVIEW_URL.format(v=version), zip_main, main_sha, no_verify)
+        _download_verified(PLUGINS_URL.format(v=version), zip_plugins, plugins_sha, no_verify)
     except Exception as e:
         print(f"[便携版] 下载失败：{e}")
         # 若已有旧缓存但解压失败，尝试用旧缓存兜底
@@ -164,10 +176,13 @@ def _sha256(path):
 def _extract_zip(zip_path, dest_dir):
     """解压 zip 到 dest_dir，安全处理路径穿越（禁止 '../'）。"""
     with zipfile.ZipFile(zip_path) as z:
+        root = dest_dir.resolve()
         for member in z.namelist():
             # 防 zip-slip：解析后不得逃出 dest_dir
             target = (dest_dir / member).resolve()
-            if not str(target).startswith(str(dest_dir.resolve())):
+            try:
+                target.relative_to(root)
+            except ValueError:
                 raise ValueError(f"非法路径：{member}")
         z.extractall(dest_dir)
 

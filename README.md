@@ -11,7 +11,7 @@ Turn image folders into multi-page PDFs — powered by IrfanView's `/multipdf` c
 - ♻️ **持续运行** — 处理完一个文件夹窗口不关闭，可继续拖入下一个
 - 🛡️ **容错** — 单个文件夹失败不中断其余处理
 - 🔢 **自然排序** — `2.jpg` 排在 `10.jpg` 之前
-- ⚡ **并行处理** — 4 线程并行批量转换，快 3-4 倍
+- ⚡ **并行处理** — 默认 16 线程并行批量转换（可按机器性能调整）
 - 📊 **TUI 进度网格** — 实时方格进度 + 百分比 + ETA 预估
 - 🔧 **智能探测** — 5 种策略自动定位 IrfanView
 - 📦 **便携模式** — 免安装 IrfanView，自动下载官方包到临时缓存（退出即清）
@@ -66,7 +66,7 @@ python launcher.py
 
 ```python
 OUTPUT_DIR = Path(r"C:\Users\YourName\Desktop\PDF_Output")  # 输出目录（必改）
-MAX_WORKERS = 4   # 批量并行线程数（默认 4）
+MAX_WORKERS = 16      # 批量并行线程数（默认 16）
 GRID_WIDTH = 8    # TUI 网格每行方格数
 ```
 
@@ -82,7 +82,7 @@ python launcher.py --keep-cache  # 保留缓存（默认退出即清）
 python launcher.py --cleanup     # 手动清理缓存
 ```
 
-- 仅从官方域名下载，SHA-256 校验（`--no-verify` 可跳过）
+- 仅从官方域名下载，已登记版本默认 SHA-256 校验；未登记版本需先补哈希或显式使用 `--no-verify`
 - 首次运行需联网（~30MB）；`folder_to_pdf.py` 则使用本机已装的 IrfanView
 
 ## Tests / 测试

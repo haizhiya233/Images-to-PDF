@@ -35,7 +35,7 @@ import time
 
 # ================= 用户可修改区 =================
 OUTPUT_DIR = Path(r"C:\Users\31657\Desktop\PDF_Output")  # 用户在此修改输出目录
-MAX_WORKERS = 4  # 批量处理时的并行线程数
+MAX_WORKERS = 16  # 批量处理时的并行线程数
 GRID_WIDTH = 8  # TUI 网格宽度（每行显示多少个方格）
 # ===============================================
 
@@ -222,29 +222,31 @@ def prompt_folder():
 
 def convert_single_folder(folder, irfan):
     """把单个文件夹转成 PDF，返回生成的 PDF 路径或 None（失败时打印错误）。"""
+    tmp_list = None
     try:
         images = collect_images(folder)
         
         OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
         output_pdf = OUTPUT_DIR / f"{folder.name}.pdf"
 
+        # 删除旧文件，避免 IrfanView 失败时把旧 PDF 误判为本次成功。
+        if output_pdf.exists():
+            output_pdf.unlink()
+
         cmd, tmp_list = build_multipdf_cmd(irfan, output_pdf, images)
 
         result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=600)
 
-        # 清理临时文件列表
+        if result.returncode == 0 and output_pdf.exists() and output_pdf.stat().st_size > 0:
+            return output_pdf
+    except Exception:
+        return None
+    finally:
         if tmp_list:
             try:
                 os.unlink(tmp_list)
-            except Exception:
+            except OSError:
                 pass
-
-        if output_pdf.exists() and output_pdf.stat().st_size > 0:
-            return output_pdf
-        else:
-            return None
-    except Exception:
-        return None
 
 
 def subfolders_with_images(folder):
@@ -361,6 +363,10 @@ def convert_folder(raw):
         OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
         output_pdf = OUTPUT_DIR / f"{folder.name}.pdf"
 
+        # 与批量模式一致，避免失败时沿用旧 PDF。
+        if output_pdf.exists():
+            output_pdf.unlink()
+
         cmd, tmp_list = build_multipdf_cmd(irfan, output_pdf, images)
 
         print("正在调用 IrfanView 生成 PDF ...")
@@ -372,7 +378,7 @@ def convert_folder(raw):
             except Exception:
                 pass
 
-        if output_pdf.exists() and output_pdf.stat().st_size > 0:
+        if result.returncode == 0 and output_pdf.exists() and output_pdf.stat().st_size > 0:
             print("\n✅ 生成成功！")
             print(f"   输出文件：{output_pdf}")
             print(f"   页数（图片数）：{len(images)}")

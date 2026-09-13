@@ -9,6 +9,9 @@
 import unittest
 import tempfile
 import os
+import subprocess
+import zipfile
+from unittest.mock import patch
 from pathlib import Path
 
 # 让测试能 import 到目标脚本（Windows 中文路径在 WSL 下也可访问）
@@ -19,6 +22,11 @@ spec = importlib.util.spec_from_file_location("folder_to_pdf", SCRIPT_PATH)
 assert spec is not None and spec.loader is not None, "无法加载 folder_to_pdf.py"
 folder_to_pdf = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(folder_to_pdf)
+
+launcher_spec = importlib.util.spec_from_file_location("launcher", Path(__file__).parent / "launcher.py")
+assert launcher_spec is not None and launcher_spec.loader is not None
+launcher = importlib.util.module_from_spec(launcher_spec)
+launcher_spec.loader.exec_module(launcher)
 
 natural_key = folder_to_pdf.natural_key
 collect_images = folder_to_pdf.collect_images
@@ -205,6 +213,54 @@ class TestIrfanviewOverride(unittest.TestCase):
         # 不存在时不应返回，走正常探测抛 RuntimeError
         with self.assertRaises(RuntimeError):
             folder_to_pdf.resolve_irfanview()
+
+
+class TestConversionResult(unittest.TestCase):
+    """转换失败时不能把旧 PDF 误判为成功。"""
+
+    def test_failed_process_does_not_return_existing_pdf(self):
+        with tempfile.TemporaryDirectory() as tmp_name:
+            folder = Path(tmp_name) / "images"
+            folder.mkdir()
+            (folder / "1.jpg").write_bytes(b"x")
+            output_dir = Path(tmp_name) / "output"
+            output_dir.mkdir()
+            old_pdf = output_dir / "images.pdf"
+            old_pdf.write_bytes(b"old")
+
+            original_output = folder_to_pdf.OUTPUT_DIR
+            folder_to_pdf.OUTPUT_DIR = output_dir
+            try:
+                with patch.object(
+                    folder_to_pdf.subprocess,
+                    "run",
+                    return_value=subprocess.CompletedProcess([], 1, stdout="", stderr="failed"),
+                ):
+                    self.assertIsNone(
+                        folder_to_pdf.convert_single_folder(folder, Path("i_view64.exe"))
+                    )
+                self.assertFalse(old_pdf.exists())
+            finally:
+                folder_to_pdf.OUTPUT_DIR = original_output
+
+
+class TestLauncherSafety(unittest.TestCase):
+    def test_zip_path_prefix_bypass_is_rejected(self):
+        with tempfile.TemporaryDirectory() as tmp_name:
+            root = Path(tmp_name)
+            zip_path = root / "bad.zip"
+            destination = root / "out"
+            destination.mkdir()
+            with zipfile.ZipFile(zip_path, "w") as archive:
+                archive.writestr("../out-evil/file.txt", "bad")
+            with self.assertRaises(ValueError):
+                launcher._extract_zip(zip_path, destination)
+
+    def test_unknown_version_requires_explicit_opt_out(self):
+        with tempfile.TemporaryDirectory() as tmp_name:
+            with patch.object(launcher, "cache_dir", return_value=Path(tmp_name)):
+                with self.assertRaises(ValueError):
+                    launcher.ensure_irfanview(version="999", no_verify=False)
 
 
 if __name__ == "__main__":
