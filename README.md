@@ -13,6 +13,7 @@ Turn image folders into multi-page PDFs — powered by IrfanView's `/multipdf` c
 - 🔢 **自然排序** — `2.jpg` 排在 `10.jpg` 之前
 - ⚡ **并行处理** — 默认 16 线程并行批量转换（可按机器性能调整）
 - 📊 **TUI 进度网格** — 实时方格进度 + 百分比 + ETA 预估
+- 🗜️ **体积可控** — 自动把 PDF 插件切到 JPEG 压缩，输出约为素材的 **1.1 倍**（IrfanView 默认的 Flate 无损会膨胀 **4~17 倍**）
 - 🔧 **智能探测** — 5 种策略自动定位 IrfanView
 - 📦 **便携模式** — 免安装 IrfanView，自动下载官方包到临时缓存（退出即清）
 
@@ -60,14 +61,40 @@ python launcher.py
 
 **直接传路径** — `python folder_to_pdf.py "D:\MyFolder"`
 
+## PDF 体积 / Output Size
+
+IrfanView 的 PDF 插件默认用 **Flate 无损**压缩：它会把每张 JPEG 解码成裸 RGB 再用
+zlib 重新压缩。对漫画这类网点/线条素材几乎压不动，于是输出比源图大 4~17 倍，
+**画质却毫无提升**。
+
+本工具在每次运行前自动写入一份 IrfanView 配置（`i_view64.ini` 的 `[PDF]` 节），
+把压缩方式改成 JPEG，并通过官方 `/ini=` 开关让 IrfanView 读取它：
+
+| `PDF_COMPRESSION` | 实际压缩方式 | 相对源图体积 |
+|---|---|---|
+| 1 | Flate 无损（IrfanView 默认，不建议） | 4.6x |
+| **2（默认）** | **JPEG q95** | **1.14x** |
+| 3 | JPEG q80 | 0.89x |
+| 4 | JPEG q65 | 0.79x |
+| 5 | JPEG q40 | 0.44x |
+
+> 实测数据（1988×3057、q80 的漫画页，源图 1.10 MB）：Flate 输出 5.07 MB，
+> q95 输出 1.25 MB。**q95 与 Flate 的像素完全相同**，省下的体积纯属编码方式优化。
+> 调到 3~5 会更小，但会引入一次可见的有损重编码。
+
+配置写在脚本旁的 `.irfanview_ini/` 目录，**不需要管理员权限**，也不会改动
+`Program Files` 里的 IrfanView 安装。
+
 ## Configuration / 配置
 
 编辑 `folder_to_pdf.py` 顶部常量：
 
 ```python
 OUTPUT_DIR = Path(r"C:\Users\YourName\Desktop\PDF_Output")  # 输出目录（必改）
-MAX_WORKERS = 16      # 批量并行线程数（默认 16）
-GRID_WIDTH = 8    # TUI 网格每行方格数
+MAX_WORKERS = 16                  # 批量并行线程数（默认 16）
+GRID_WIDTH = 8                    # TUI 网格每行方格数
+PDF_COMPRESSION = 2               # PDF 压缩：1=Flate 2=q95 3=q80 4=q65 5=q40
+PDF_INI_DIR = Path(__file__).parent / ".irfanview_ini"   # IrfanView 配置目录
 ```
 
 ## Portable Mode / 便携模式
@@ -88,7 +115,7 @@ python launcher.py --cleanup     # 手动清理缓存
 ## Tests / 测试
 
 ```bash
-python -m unittest test_folder_to_pdf -v   # 18 个测试
+python -m unittest test_folder_to_pdf -v   # 29 个测试
 ```
 
 ## License / 许可证
