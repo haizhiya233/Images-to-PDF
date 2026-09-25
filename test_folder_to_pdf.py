@@ -9,6 +9,7 @@
 import unittest
 import tempfile
 import os
+import sys
 import subprocess
 import zipfile
 from unittest.mock import patch
@@ -34,6 +35,8 @@ build_multipdf_cmd = folder_to_pdf.build_multipdf_cmd
 subfolders_with_images = folder_to_pdf.subfolders_with_images
 set_irfanview_override = folder_to_pdf.set_irfanview_override
 IMAGE_EXTS = folder_to_pdf.IMAGE_EXTS
+ini_encoding = folder_to_pdf.ini_encoding
+apply_pdf_compression = folder_to_pdf.apply_pdf_compression
 
 
 class TestNaturalKey(unittest.TestCase):
@@ -261,6 +264,130 @@ class TestLauncherSafety(unittest.TestCase):
             with patch.object(launcher, "cache_dir", return_value=Path(tmp_name)):
                 with self.assertRaises(ValueError):
                     launcher.ensure_irfanview(version="999", no_verify=False)
+
+
+class TestIniEncoding(unittest.TestCase):
+    """ini_encoding() 必须返回 Python 真正认识的编码名。"""
+
+    def test_returns_usable_codec_name(self):
+        # Given: 无前置条件
+        import codecs
+        # When: 调用 ini_encoding()
+        enc = ini_encoding()
+        # Then: 返回值可被 codecs.lookup 解析（编码不存在时会抛 LookupError 而失败）
+        self.assertIsNotNone(codecs.lookup(enc))
+
+
+class TestApplyPdfCompression(unittest.TestCase):
+    """apply_pdf_compression() 生成正确的 INI 文件。"""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.ini_dir = Path(self.tmp.name) / ".irfanview_ini"
+        # 保存并覆盖模块常量
+        self.orig_ini_dir = folder_to_pdf.PDF_INI_DIR
+        self.orig_compression = folder_to_pdf.PDF_COMPRESSION
+        folder_to_pdf.PDF_INI_DIR = self.ini_dir
+        folder_to_pdf.PDF_COMPRESSION = 2  # JPEG q95
+
+    def tearDown(self):
+        folder_to_pdf.PDF_INI_DIR = self.orig_ini_dir
+        folder_to_pdf.PDF_COMPRESSION = self.orig_compression
+        self.tmp.cleanup()
+
+    def test_64bit_exe_produces_i_view64_ini(self):
+        # Given: i_view64.exe 路径
+        irfan = Path("i_view64.exe")
+        # When: 调用 apply_pdf_compression()
+        ini_path = apply_pdf_compression(irfan)
+        # Then: 生成的文件名为 i_view64.ini
+        self.assertEqual(ini_path.name, "i_view64.ini")
+        self.assertTrue(ini_path.exists())
+
+    def test_32bit_exe_produces_i_view32_ini(self):
+        # Given: i_view32.exe 路径
+        irfan = Path("i_view32.exe")
+        # When: 调用 apply_pdf_compression()
+        ini_path = apply_pdf_compression(irfan)
+        # Then: 生成的文件名为 i_view32.ini
+        self.assertEqual(ini_path.name, "i_view32.ini")
+        self.assertTrue(ini_path.exists())
+
+    def test_ini_contains_pdf_section_and_compr_keys(self):
+        # Given: i_view64.exe 路径
+        irfan = Path("i_view64.exe")
+        # When: 调用 apply_pdf_compression()
+        ini_path = apply_pdf_compression(irfan)
+        # Then: INI 包含 [PDF] 节和三个 Compr* 键，值等于 PDF_COMPRESSION
+        content = ini_path.read_text(encoding=ini_encoding())
+        self.assertIn("[PDF]", content)
+        self.assertIn("ComprColor=2", content)
+        self.assertIn("ComprGray=2", content)
+        self.assertIn("ComprBW=2", content)
+
+    def test_creates_directory_when_not_exists(self):
+        # Given: 目录不存在
+        new_dir = Path(self.tmp.name) / "new_ini_dir"
+        folder_to_pdf.PDF_INI_DIR = new_dir
+        irfan = Path("i_view64.exe")
+        # When: 调用 apply_pdf_compression()
+        ini_path = apply_pdf_compression(irfan)
+        # Then: 目录被创建，文件存在
+        self.assertTrue(new_dir.exists())
+        self.assertTrue(ini_path.exists())
+
+    def test_atomic_write_via_tmp_then_replace(self):
+        # Given: i_view64.exe 路径
+        irfan = Path("i_view64.exe")
+        # When: 调用 apply_pdf_compression()
+        ini_path = apply_pdf_compression(irfan)
+        # Then: 无 .tmp 残留文件（原子替换已完成）
+        tmp_files = list(self.ini_dir.glob("*.tmp"))
+        self.assertEqual(len(tmp_files), 0)
+
+
+class TestBuildMultipdfCmdWithIni(unittest.TestCase):
+    """build_multipdf_cmd() 在短路径和长路径两条分支都包含 /ini=。"""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.ini_dir = Path(self.tmp.name) / ".irfanview_ini"
+        self.orig_ini_dir = folder_to_pdf.PDF_INI_DIR
+        folder_to_pdf.PDF_INI_DIR = self.ini_dir
+
+    def tearDown(self):
+        folder_to_pdf.PDF_INI_DIR = self.orig_ini_dir
+        self.tmp.cleanup()
+
+    def test_short_direct_list_contains_ini(self):
+        # Given: 短路径列表（总长 <3800）
+        out = Path(r"C:\out\out.pdf")
+        imgs = [Path(r"C:\img\a.jpg"), Path(r"C:\img\b.jpg")]
+        # When: 调用 build_multipdf_cmd()
+        cmd, tmp = build_multipdf_cmd(Path("i_view64.exe"), out, imgs)
+        # Then: 命令包含 /ini=，且无 filelist 回退
+        self.assertIsNone(tmp)
+        self.assertIn("/ini=", cmd)
+        self.assertIn(str(self.ini_dir), cmd)
+        self.assertNotIn("filelist=", cmd)
+        self.assertTrue(cmd.endswith("/cmdexit"))
+
+    def test_long_list_fallback_contains_ini_and_filelist(self):
+        # Given: 超过 3800 字符的长路径列表
+        out = Path(r"C:\out\out.pdf")
+        long_path = r"C:\VeryLongDirectoryNameToPushLengthOverLimit" + "\\" * 5 + "image"
+        imgs = [Path(long_path + f"_{i}.jpg") for i in range(60)]
+        # When: 调用 build_multipdf_cmd()
+        cmd, tmp = build_multipdf_cmd(Path("i_view64.exe"), out, imgs)
+        # Then: 命令同时包含 /ini= 和 filelist=
+        self.assertIsNotNone(tmp)
+        self.assertIn("/ini=", cmd)
+        self.assertIn(str(self.ini_dir), cmd)
+        self.assertIn("filelist=", cmd)
+        self.assertTrue(cmd.endswith("/cmdexit"))
+        # 清理临时文件
+        if tmp and os.path.exists(tmp):
+            os.unlink(tmp)
 
 
 if __name__ == "__main__":

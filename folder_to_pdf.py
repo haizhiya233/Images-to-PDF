@@ -35,9 +35,23 @@ import time
 
 # ================= 用户可修改区 =================
 OUTPUT_DIR = Path(r"C:\Users\31657\Desktop\PDF_Output")  # 用户在此修改输出目录
-MAX_WORKERS = 4  # 批量处理时的并行线程数
+MAX_WORKERS = 16  # 批量处理时的并行线程数
 GRID_WIDTH = 8  # TUI 网格宽度（每行显示多少个方格）
+# PDF 压缩方式：1=Flate 无损（IrfanView 默认，体积暴涨 4~17 倍）
+#               2=JPEG q95  3=JPEG q80  4=JPEG q65  5=JPEG q40
+PDF_COMPRESSION = 2
+# IrfanView 配置目录：存放 i_viewNN.ini，用 /ini= 指向它，无需管理员权限
+PDF_INI_DIR = Path(__file__).parent / ".irfanview_ini"
 # ===============================================
+
+# PDF_COMPRESSION 取值 -> 展示名称（供 convert_folder 打印当前档位）
+PDF_COMPRESSION_LABELS = {
+    1: "Flate 无损（体积大）",
+    2: "JPEG q95",
+    3: "JPEG q80",
+    4: "JPEG q65",
+    5: "JPEG q40",
+}
 
 # 支持的图片扩展名（小写，忽略大小写）
 IMAGE_EXTS = {
@@ -69,6 +83,16 @@ def natural_key(name):
         int(part) if part.isdigit() else part.lower()
         for part in re.split(r"(\d+)", str(name))
     ]
+
+
+def ini_encoding() -> str:
+    """返回写入 INI 文件的编码：Windows 上优先 mbcs，否则回退到系统默认编码。"""
+    try:
+        import codecs
+        codecs.lookup("mbcs")
+        return "mbcs"
+    except LookupError:
+        return sys.getdefaultencoding()
 
 
 def resolve_irfanview():
@@ -165,6 +189,28 @@ def check_pdf_plugin(irfan_dir):
         )
 
 
+def apply_pdf_compression(irfan: Path) -> Path:
+    """生成 IrfanView PDF 插件的 INI 配置，设置 JPEG 压缩等级。
+
+    将 INI 写入 PDF_INI_DIR，文件名与 IrfanView 可执行文件同名（i_view64.ini 或 i_view32.ini）。
+    使用临时文件 + os.replace 实现原子写入，避免并发读取到不完整文件。
+    """
+    PDF_INI_DIR.mkdir(parents=True, exist_ok=True)
+    ini = PDF_INI_DIR / f"{irfan.stem}.ini"
+    tmp = ini.with_name(ini.name + ".tmp")
+    body = (
+        "[PDF]\r\n"
+        f"ComprColor={PDF_COMPRESSION}\r\n"
+        f"ComprGray={PDF_COMPRESSION}\r\n"
+        f"ComprBW={PDF_COMPRESSION}\r\n"
+    )
+    enc = ini_encoding()
+    with open(tmp, "w", encoding=enc, newline="") as f:
+        f.write(body)
+    os.replace(tmp, ini)
+    return ini
+
+
 def collect_images(folder):
     """收集 folder 顶层（不递归）的图片文件，返回按自然序排序的 Path 列表。"""
     if not folder.is_dir():
@@ -187,18 +233,14 @@ def build_multipdf_cmd(irfan, output_pdf, image_paths):
     """
     quoted = ",".join(f'"{p}"' for p in image_paths)
     direct = f'/multipdf=("{output_pdf}",{quoted})'
-    full_len = len(str(irfan)) + 1 + len(direct) + len(" /cmdexit")
+    ini_opt = f'/ini="{PDF_INI_DIR}"'
+    full_len = len(str(irfan)) + 1 + len(direct) + len(" /cmdexit") + len(ini_opt) + 1
     if full_len <= 3800:
-        cmd = f'"{irfan}" {direct} /cmdexit'
+        cmd = f'"{irfan}" {direct} {ini_opt} /cmdexit'
         return cmd, None
 
     # 回退到 filelist
-    try:
-        import codecs
-        codecs.lookup("mbcs")
-        enc = "mbcs"
-    except LookupError:
-        enc = sys.getdefaultencoding()
+    enc = ini_encoding()
 
     fd, tmp_path = tempfile.mkstemp(suffix=".txt", prefix="irfan_pdf_")
     os.close(fd)
@@ -206,7 +248,7 @@ def build_multipdf_cmd(irfan, output_pdf, image_paths):
     with open(tmp_path, "w", encoding=enc) as f:
         for p in image_paths:
             f.write(str(p).replace("/", "\\") + "\n")
-    cmd = f'"{irfan}" /multipdf=("{output_pdf}",filelist="{win_path}") /cmdexit'
+    cmd = f'"{irfan}" /multipdf=("{output_pdf}",filelist="{win_path}") {ini_opt} /cmdexit'
     return cmd, tmp_path
 
 
@@ -349,6 +391,9 @@ def convert_folder(raw):
         irfan = resolve_irfanview()
         print(f"\n✓ IrfanView: {irfan}")
         check_pdf_plugin(irfan.parent)
+        ini_path = apply_pdf_compression(irfan)
+        label = PDF_COMPRESSION_LABELS.get(PDF_COMPRESSION, f"未知({PDF_COMPRESSION})")
+        print(f"✓ PDF 压缩已设置：{label} (INI: {ini_path})")
 
         subdirs = subfolders_with_images(folder)
         if subdirs:
