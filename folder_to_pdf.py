@@ -34,15 +34,24 @@ import threading
 import time
 
 # ================= 用户可修改区 =================
-OUTPUT_DIR = Path(r"C:\Users\31657\Desktop\PDF_Output")  # 用户在此修改输出目录
-MAX_WORKERS = 16  # 批量处理时的并行线程数
-GRID_WIDTH = 8  # TUI 网格宽度（每行显示多少个方格）
-# PDF 压缩方式：1=Flate 无损（IrfanView 默认，体积暴涨 4~17 倍）
-#               2=JPEG q95  3=JPEG q80  4=JPEG q65  5=JPEG q40
+
+# PDF 输出目录
+OUTPUT_DIR = Path(r"C:\Users\31657\Desktop\PDF_Output")
+
+# 批量转换的并行线程数
+MAX_WORKERS = 16
+
+# TUI 进度网格每行显示多少个方格
+GRID_WIDTH = 8
+
+# PDF 压缩档位：1=Flate 无损（IrfanView 默认，体积大）  2=q95  3=q80  4=q65  5=q40
 PDF_COMPRESSION = 2
-# IrfanView 配置目录：存放 i_viewNN.ini，用 /ini= 指向它，无需管理员权限
+
+# IrfanView 配置目录（存放 i_viewNN.ini，通常无需改动）
 PDF_INI_DIR = Path(__file__).parent / ".irfanview_ini"
+
 # ===============================================
+
 
 # PDF_COMPRESSION 取值 -> 展示名称（供 convert_folder 打印当前档位）
 PDF_COMPRESSION_LABELS = {
