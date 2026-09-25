@@ -1,17 +1,14 @@
 # PROJECT KNOWLEDGE BASE
 
-**Generated:** 2026-09-09  
-**Commit:** 89212209  
-**Branch:** main  
-**Version:** v2.1.0 (Reliability + Security Hardening)
+**Generated:** 2026-09-25  
+**Commit:** 59ba91b  
+**Branch:** main
 
 ## OVERVIEW
 
-Python CLI tool that merges image folders into multi-page PDFs by shelling out to IrfanView's `/multipdf`. Stdlib-only. Features:
-- **Core:** Single image folder → single PDF; parent folder with subfolders → batch mode (one PDF per subfolder)
-- **Performance:** 16-thread parallel batch processing by default (tunable), IrfanView path cached to memory (80x fewer detections)
-- **UX:** Beautiful TUI progress grid, real-time percentage (0-100%), ETA estimation
-- **Portable:** Auto-downloads official IrfanView-64 to `%TEMP%` cache (ephemeral, auto-cleaned on exit)
+Stdlib-only Windows CLI that merges image folders into multi-page PDFs by shelling out to
+IrfanView 64's `/multipdf`. No third-party Python deps. `launcher.py` is an optional
+portable wrapper that downloads IrfanView to a throwaway `%TEMP%` cache.
 
 ## STRUCTURE
 
@@ -19,7 +16,7 @@ Python CLI tool that merges image folders into multi-page PDFs by shelling out t
 Images-to-PDF/
 ├── folder_to_pdf.py        # core app: TUI + parallel batch + caching
 ├── launcher.py             # portable launcher: download/extract IrfanView cache
-├── test_folder_to_pdf.py   # unittest suite (21 tests)
+├── test_folder_to_pdf.py   # unittest suite (29 tests)
 ├── README.md               # comprehensive usage docs (zh/en)
 ├── AGENTS.md               # this file
 └── LICENSE                 # MIT
@@ -27,280 +24,170 @@ Images-to-PDF/
 
 Single flat module — no packages, no subdirectories.
 
-## WHERE TO LOOK
-
-| Task | Location | Notes |
-|------|----------|-------|
-| Entry point + loop | `folder_to_pdf.py:main()` | non-closing console loop; supports `--irfanview-path` |
-| Convert dispatch (single vs batch) | `convert_folder()` | auto-detects subdirs-with-images → single/batch mode |
-| **Batch parallel processing** | `convert_folder_batch()` | ThreadPoolExecutor(MAX_WORKERS), real-time TUI grid updates |
-| **TUI progress grid** | `class TUIProgressGrid` | renders percentage, ETA, emoji grid (✅/❌/⏳) |
-| One subfolder → PDF | `convert_single_folder()` | core conversion, reused by batch, returns Path or None |
-| Batch detection | `subfolders_with_images()` | returns only image-bearing subdirs, natural-sorted |
-| Image gathering | `collect_images()` | top-level only, natural sort |
-| Command builder | `build_multipdf_cmd()` | returns shell STRING; fallback to filelist on >3800 chars |
-| **IrfanView locate + cache** | `resolve_irfanview()` | override → .lnk → PATH → registry; result cached in memory |
-| PDF plugin check | `check_pdf_plugin()` | requires `Plugins/PDF.dll` |
-| Natural sort key | `natural_key()` | numeric-aware; `2` before `10` |
-| Input prompt | `prompt_folder()` | drag-and-drop; exit on `exit/quit/q`/empty |
-| Portable launcher | `launcher.py:main()` | downloads IrfanView cache, then runs folder_to_pdf |
-| Download/extract pipeline | `launcher.py:ensure_irfanview()` | handles anti-bot midpage + SHA-256 verify + DLL relocation |
-
 ## CODE MAP
 
 ### folder_to_pdf.py (Main Module)
 
-| Symbol | Type | Location | Caller Count | Role |
-|--------|------|----------|--------------|------|
-| `main` | func | :289 | - | console loop; argparse for `--irfanview-path`/folder |
-| `convert_folder` | func | :247 | 1 (main loop) | dispatcher: single file → single PDF; batch → parallel TUI grid |
-| `convert_folder_batch` | func | :265 | 1 (convert_folder) | **NEW:** ThreadPoolExecutor(MAX_WORKERS), TUI grid render, ETA calc |
-| `convert_single_folder` | func | :219 | 2 (batch executor, single mode) | per-folder conversion; no console output (silent for batch threads) |
-| `subfolders_with_images` | func | :257 | 2 (convert_folder, TUI setup) | batch subdir detection |
-| `collect_images` | func | :157 | 1 (convert_single_folder) | image gather + natural sort |
-| `build_multipdf_cmd` | func | :170 | 1 (convert_single_folder) | shell command build; filelist fallback on long paths |
-| `resolve_irfanview` | func | :79 | 1 (convert_folder) | IrfanView detection (5 strategies); cached to `_irfanview_cache` (memory) |
-| `set_irfanview_override` | func | :76 | 1 (main) | portable path injection; sets global `_irfanview_override` |
-| `check_pdf_plugin` | func | :146 | 1 (convert_folder) | PDF.dll check |
-| `natural_key` | func | :61 | 3 (collect_images, subfolders_with_images, test) | natural sort key generator |
-| `prompt_folder` | func | :213 | 1 (main loop) | input prompt + exit handling |
-| **class TaskStatus** | enum-like | :51 | - | **NEW:** status emoji constants (⏳/✅/❌) |
-| **class TUIProgressGrid** | class | :278 | 1 (batch) | **NEW:** renders progress, percentage, ETA, emoji grid |
+| Symbol | Type | Location | Refs | Role |
+|--------|------|----------|------|------|
+| `main` | func | :438 | 1 | console loop (non-closing); argparse `--irfanview-path`/folder |
+| `convert_folder` | func | :381 | 1 | dispatcher: subdirs-with-images → batch, else single PDF; **applies compression INI** |
+| `convert_folder_batch` | func | :345 | 1 | ThreadPoolExecutor(MAX_WORKERS), live TUI grid |
+| `convert_single_folder` | func | :265 | 1 | per-folder conversion via `executor.submit`; silent (no console output) |
+| `subfolders_with_images` | func | :294 | 2 | image-bearing subdirs, natural-sorted |
+| `prompt_folder` | func | :255 | 1 | drag-and-drop prompt; exits on `exit`/`quit`/`q`/empty |
+| `build_multipdf_cmd` | func | :228 | 2 | **shell STRING** + `/ini=`; filelist fallback >3800 chars |
+| `collect_images` | func | :214 | 2 | image gather, top-level only, natural sort |
+| `apply_pdf_compression` | func | :192 | 1 | atomically writes tool-owned `i_viewNN.ini` (`[PDF]` Compr* keys) |
+| `check_pdf_plugin` | func | :181 | 1 | requires `Plugins/PDF.dll` |
+| `ini_encoding` | func | :88 | 2 | `mbcs` on Windows, else system default; shared by INI + filelist writers |
+| `resolve_irfanview` | func | :98 | 1 | 5-strategy detection; cached to `_irfanview_cache` |
+| `set_irfanview_override` | func | :74 | 1 | portable path injection; sets `_irfanview_override` |
+| `natural_key` | func | :80 | 2 | numeric-aware sort key (`2` before `10`) |
+| **class TaskStatus** | enum-like | :68 | - | status emoji constants (⏳/✅/❌) |
+| **class TUIProgressGrid** | class | :304 | 1 | renders progress, percentage, ETA, emoji grid |
 
 ### launcher.py (Portable Mode)
 
 | Symbol | Type | Location | Role |
 |--------|------|----------|------|
-| `main` | func | :202 | entry point; orchestrates download/cleanup |
-| `ensure_irfanview` | func | :58 | download/extract IrfanView cache; handles SHA-256 verify |
-| `cleanup_cache` | func | :49 | purge cache dir (idempotent) |
-| `run_main` | func | :191 | launch folder_to_pdf with portable exe path |
-| `_download_verified` | func | :111 | download + SHA-256 + anti-bot midpage handling |
-| `_fetch` | func | :136 | download with UA/Referer headers |
-| `_extract_zip` | func | :164 | safe zip extraction (zip-slip protection) |
-| `_relocate_plugin_dlls` | func | :175 | move root DLLs into Plugins/ subdirectory |
+| `DEFAULT_VERSION` | const | :26 | IrfanView version string, part of the download URL |
+| `IVIEW_URL` / `PLUGINS_URL` | const | :27 / :28 | official `irfanview.info` ZIP templates |
+| `VERSION_SHA256` | const | :30 | `{version: (main_zip_sha, plugins_zip_sha)}`; unknown version **must** require `--no-verify` |
+| `SCRIPT_DIR` / `EXE_NAME` | const | :37 / :38 | script dir; `i_view64.exe` |
+| `cache_dir` | func | :41 | `%TEMP%\Images-to-PDF\irfanview`, fallback `~/.local/share/...` when no `%TEMP%` |
+| `cleanup_cache` | func | :53 | idempotent `rmtree` of cache root |
+| `ensure_irfanview` | func | :62 | returns exe path; download → verify → extract → relocate DLLs; falls back to stale cache if download fails |
+| `_download_verified` | func | :123 | fetch, detect anti-bot interstitial, SHA-256 check, write |
+| `_fetch` | func | :148 | urllib GET with UA + optional `Referer` |
+| `_extract_download_url` | func | :158 | pulls the real href out of the interstitial page |
+| `_sha256` | func | :168 | file digest helper |
+| `_extract_zip` | func | :176 | zip-slip guard: every member must `.relative_to(dest_dir.resolve())` |
+| `_relocate_plugin_dlls` | func | :190 | moves root-level DLLs (incl. `PDF.dll`) into `Plugins/` |
+| `run_main` | func | :206 | `subprocess.call([sys.executable, folder_to_pdf.py, --irfanview-path, exe])` |
+| `main` | func | :217 | argparse; `try/finally` guarantees cache cleanup unless `--keep-cache` |
 
 ## CONVENTIONS
 
 - Single-file app; NO packages/subpackages. All functions top-level in `folder_to_pdf.py`.
-- **New (v2.0):** `class TUIProgressGrid` for OOP progress state management.
-- User-editable config block at top: `OUTPUT_DIR`, `MAX_WORKERS`, `GRID_WIDTH`.
+- User-editable config block at top: `OUTPUT_DIR`, `MAX_WORKERS`, `GRID_WIDTH`, `PDF_COMPRESSION`, `PDF_INI_DIR`.
+- **No third-party deps — stdlib only** (no Pillow/pypdf/typer/rich). Tests use `unittest`, not pytest.
 - Console output is Chinese (zh-CN) — keep it localized.
-- Function naming: snake_case, one responsibility per function.
+- snake_case, one responsibility per function.
 - Global state: `_irfanview_cache`, `_irfanview_lock` (thread-safe), `_irfanview_override`.
-- No third-party deps — stdlib only.
 
-## KEY IMPROVEMENTS (v2.0)
+## PDF OUTPUT SIZE (the `/ini=` mechanism)
 
-### 1. Caching: IrfanView Path (Memory)
-```python
-_irfanview_cache = None
-_irfanview_lock = threading.Lock()
+IrfanView's PDF plugin defaults to `ComprColor=1` = **Flate / zlib lossless**: it decodes
+each JPEG to raw RGB (72.9 MB for a 3976x6114 page) and re-compresses to ~17 MB. On
+manga/screentone content that is a **4x–17x bloat with zero quality gain** — lossless LZ
+cannot compress dithered line art the way lossy DCT can.
 
-def resolve_irfanview():
-    global _irfanview_cache
-    if _irfanview_cache is not None:
-        return _irfanview_cache  # fast path, no lock
-    with _irfanview_lock:
-        if _irfanview_cache is not None:
-            return _irfanview_cache  # double-check
-        # ... detect IrfanView ...
-        _irfanview_cache = p  # cache to memory
-        return p
-```
-**Benefit:** Batch processing 80 folders: 80 detections → 1 detection (80x fewer registry queries).
+The plugin has **no CLI switch** for this, but reads it from an INI: section `[PDF]`, keys
+`ComprColor` / `ComprGray` / `ComprBW`. It also honours `/ini="Folder"` to relocate INI
+read/write, which **takes precedence** over the INI beside the exe and needs no admin rights.
+`apply_pdf_compression()` writes that INI; `build_multipdf_cmd()` injects `/ini=` into both
+the direct and the filelist branch (and counts it in the 3800-char budget).
 
-### 2. Parallel Batch Processing
-```python
-def convert_folder_batch(folder, irfan):
-    grid = TUIProgressGrid(len(subdirs), grid_width=GRID_WIDTH)
-    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-        futures = {}
-        for i, sub in enumerate(subdirs):
-            future = executor.submit(convert_single_folder, sub, irfan)
-            futures[future] = i
-        for future in as_completed(futures):
-            idx = futures[future]
-            grid.update(idx, status)
-            grid.render()
-```
-**Benefit:** 4 threads convert in parallel; 80 folders × 30s each: 40 min → 10 min (3-4x faster).
+| `PDF_COMPRESSION` | Plugin setting | Measured vs source |
+|---|---|---|
+| 1 | Flate lossless (plugin default) | 4.63x |
+| **2 (default)** | **JPEG q95** | **1.14x** |
+| 3 | JPEG q80 | 0.89x |
+| 4 | JPEG q65 | 0.79x |
+| 5 | JPEG q40 | 0.44x |
 
-### 3. TUI Progress Grid
-```python
-class TUIProgressGrid:
-    def render(self):
-        # 1. Calc percentage
-        percent = (completed / self.total) * 100
-        # 2. Estimate ETA
-        if completed > 0:
-            avg_time = elapsed / completed
-            remaining = (self.total - completed) * avg_time
-        # 3. Draw grid (emoji per task)
-        for i in range(0, self.total, self.grid_width):
-            row = self.results[i:i+self.grid_width]
-            print(" ".join(status for status in row))
-```
-**Display Example:**
-```
-進度：42/80 (52.5%) ETA: 120s
---------------------------------------------------------------------
-✅ ✅ ✅ ✅ ✅ ✅ ✅ ✅
-✅ ✅ ❌ ✅ ✅ ✅ ✅ ✅
-✅ ✅ ✅ ✅ ✅ ✅ ⏳ ⏳
-...
-```
+Measured on 1988x3057 q80 comic pages (1.10 MB source): Flate → 5.07 MB, q95 → 1.25 MB.
+Real case: 158 MB of JPEGs had been producing 2.6 GB of PDFs.
 
-### 4. Task Status Enum
-```python
-class TaskStatus:
-    PENDING = "⏳"
-    SUCCESS = "✅"
-    FAILED = "❌"
-```
+**These values are undocumented by IrfanView** — determined empirically by running the real
+plugin and parsing output `/Filter`. Section/key names were recovered by disassembling
+`PDF.dll` (x64 `lea rcx, [0x22b126]` → `"PDF"`, then the three `Compr*` keys). Verified:
+`/ini=` works before *or* after `/multipdf=`; paths with spaces are fine; the plugin does
+**not** write the INI back during `/multipdf`, so N concurrent IrfanView processes sharing
+one INI is safe — hence one call before the thread pool, not per folder. Rewritten every
+run because the launcher wipes its cache on exit.
+
+**Not implemented — lossless passthrough:** embedding the original JPEG bytes as
+`/DCTDecode` gives exactly 1.00x at zero quality loss (prototype verified), but needs a
+custom PDF writer for every non-JPEG format the tool accepts (multi-frame TIFF, animated
+GIF, CMYK/16-bit PNG). Poor trade against q95's 1.14x.
 
 ## ANTI-PATTERNS (THIS PROJECT)
 
 - **NEVER pass a list to `subprocess.run` for the IrfanView call.** Windows `list2cmdline` escapes embedded quotes and silently breaks `/multipdf=(...)`. The command MUST be a string run with `shell=True`.
 - **NEVER recurse into subfolders** in `collect_images` — it uses `folder.iterdir()` (top-level only). Recursion is handled separately via batch mode on the parent folder.
 - **NEVER remove the `shell=True`** on the `subprocess.run(cmd, ...)` call.
+- **NEVER drop the `/ini=` argument** in `build_multipdf_cmd()`. Without it IrfanView falls back to the plugin default (Flate lossless) and output PDFs balloon 4-17x. If output size suddenly explodes, check this first.
+- **NEVER rename the generated INI to anything but `i_view64.ini` / `i_view32.ini`.** IrfanView matches the filename to the exe bitness; IrfanView's own docs state the name must not be changed.
 - **NEVER remove the `_irfanview_lock`** in `resolve_irfanview()` — multiple threads may call it during batch; lock ensures first caller initializes cache, others wait.
 - Do NOT introduce third-party deps (natsort, Pillow, PyPDF2, tqdm) — stdlib only.
 - **NEVER reuse a SHA-256 for another IrfanView version** — add the version to `VERSION_SHA256`, or require explicit `--no-verify`.
 
-## UNIQUE STYLES & TRICKS
+## UNIQUE STYLES
 
-### Memory Caching (Process-Lifetime)
-- IrfanView path is detected once, cached to `_irfanview_cache`, and discarded when process exits.
-- Avoids disk residue (unlike launcher's `%TEMP%` cache which is ephemeral by design).
-- Thread-safe via `threading.Lock`.
-
-### Parallel + Real-Time TUI
-- `ThreadPoolExecutor(max_workers=MAX_WORKERS)` runs conversions concurrently.
-- `as_completed()` iterates tasks in completion order (not submission order).
-- Each completion updates `grid.results[idx]`, re-renders percentage + ETA + emoji grid.
-- No blocking; grid is refreshed in real-time as tasks finish.
-
-### Filelist Fallback
-- `build_multipdf_cmd` switches to a `filelist=` temp file when the CLI exceeds 3800 chars.
-- Written in ANSI (`mbcs`) encoding for Chinese-path compat (with a `LookupError` fallback to system default).
-- Temp file is cleaned up after `subprocess.run`.
-
-### Natural Sort
-- Implemented via inline regex split (no natsort dep): `re.split(r"(\d+)", name)`.
-- Numeric parts are cast to int; alpha parts lowercased for case-insensitive sort.
-
-### IrfanView Detection (5 Strategies)
-1. Resolve desktop `.lnk` target (handles non-standard installs like `D:\电脑应用\IrfanView`).
-2. Check `C:\Program Files\IrfanView\i_view64.exe`.
-3. Check `C:\Program Files (x86)\IrfanView\i_view32.exe`.
-4. Scan `PATH` environment variable.
-5. Query Windows registry `HKCU\Software\IrfanView`.
-
-### Portable Mode
-- Launcher downloads official IrfanView-64 from `irfanview.info` (NOT redistributed; EULA-friendly).
-- Caches under `%TEMP%\Images-to-PDF\irfanview\`.
-- Auto-deletes cache on exit (try/finally in `main`).
-- SHA-256 verified by default; handles official "Click again to start Download" anti-bot page.
-
-### DLL Relocation
-- Plugins ZIP puts `PDF.dll` at zip root.
-- `_relocate_plugin_dlls` moves root-level `.dll` files into `Plugins/` so IrfanView finds them.
-
-## PERFORMANCE TARGETS (v2.0)
-
-| Metric | Old | New | Gain |
-|--------|-----|-----|------|
-| IrfanView detections (80-folder batch) | 80 | 1 | 80x |
-| Total time (80 folders, 30s each) | 40 min | 10 min | 3-4x |
-| Memory footprint (cache) | ~30MB disk | ~1KB memory | ↓ |
-| User feedback (progress) | None | Real-time grid + ETA | UX ↑↑ |
+- **IrfanView path cached in memory** (`_irfanview_cache` + `Lock`), detected once per process — unlike the launcher's `%TEMP%` cache, leaves no disk residue.
+- **Batch = `ThreadPoolExecutor` + `as_completed()`**; each completion mutates `grid.results[idx]` and re-renders percentage/ETA/emoji. Completion order, not submission order.
+- **Natural sort** without natsort: `re.split(r"(\d+)", name)`, digits cast to `int`, alpha lowercased.
+- **IrfanView detection order** (first hit wins): desktop `.lnk` target → `Program Files` 64/32 → `PATH` → `HKCU\Software\IrfanView` registry. The `.lnk` path is first because installs often live outside `Program Files`.
+- **Filelist fallback** when the command exceeds 3800 chars: temp `.txt` in `mbcs` (Chinese paths), deleted after `subprocess.run`.
+- **Console output is Chinese**, including error text and the compression level line.
 
 ## COMMANDS
 
 ```bash
-# tests (any platform with Python)
-python -m unittest test_folder_to_pdf -v
-
-# syntax check
+python -m unittest test_folder_to_pdf -v          # 29 tests, runs on Linux+Windows
 python -m py_compile folder_to_pdf.py launcher.py test_folder_to_pdf.py
 
-# core: drag-and-drop folder, then Enter
-python folder_to_pdf.py
+python folder_to_pdf.py                          # interactive: drag folder, Enter
+python folder_to_pdf.py "D:\MyFolder"            # non-interactive
+python folder_to_pdf.py --irfanview-path <exe>   # force a specific IrfanView
 
-# portable mode (auto-downloads IrfanView cache, then runs)
-python launcher.py
-
-# force re-download latest cache
-python launcher.py --update
-
-# download/extract only, don't run
-python launcher.py --download-only
-
-# keep cache after exit (default auto-cleans)
-python launcher.py --keep-cache
-
-# purge cache now
-python launcher.py --cleanup
-
-# direct folder path (no prompt)
-python folder_to_pdf.py "D:\MyFolder"
-
-# manual run (Windows)
-# double-click folder_to_pdf.py, drag a folder in, press Enter
+python launcher.py                               # portable: fetch IrfanView, then run
+python launcher.py --update                      # force re-download
+python launcher.py --download-only               # populate cache, don't run
+python launcher.py --keep-cache                  # skip exit-time cleanup
+python launcher.py --cleanup                     # purge cache and exit
+python launcher.py --no-verify                   # skip SHA-256 (unknown version)
 ```
 
 ## CONFIGURATION
 
-Edit constants at top of `folder_to_pdf.py`:
+Constants at top of `folder_to_pdf.py`:
 
 ```python
-OUTPUT_DIR = Path(r"C:\Users\YourName\Desktop\PDF_Output")  # Output directory (MUST change)
-MAX_WORKERS = 16                                            # Parallel threads (default: 16)
-GRID_WIDTH = 8                                              # Grid cells per row (default: 8)
+OUTPUT_DIR = Path(r"C:\Users\YourName\Desktop\PDF_Output")  # MUST change
+MAX_WORKERS = 16                                            # batch threads
+GRID_WIDTH = 8                                              # TUI cells per row
+PDF_COMPRESSION = 2                                         # 1=Flate 2=q95 3=q80 4=q65 5=q40
+PDF_INI_DIR = Path(__file__).parent / ".irfanview_ini"      # tool-owned IrfanView INI dir
 ```
+
+`.irfanview_ini/` is created at runtime and is **not** in `.gitignore` (no .gitignore exists).
 
 ## NOTES FOR MAINTAINERS
 
-- **Production:** Runs on Windows calling IrfanView exe. WSL/Linux host can only unit-test (no IrfanView, no `mbcs`, no `winreg`).
-- **Anti-bot trap in launcher.py:** Official `irfanview.info` `/files/*.zip` URLs first return an HTML "Click again to start Download" page. `_fetch` re-requests with a `Referer` header to get the real ZIP.
-- **DLL relocation:** Plugins ZIP puts `PDF.dll` at root; `_relocate_plugin_dlls` moves it into `Plugins/` so IrfanView finds it.
-- **Unit tests:** Import the script via `importlib` from a relative path and run on Linux — keep test logic host-agnostic.
-- **Blast radius:** Small (single-file; most functions have 1 caller). Verify `convert_folder`, `convert_folder_batch`, `build_multipdf_cmd`, and `resolve_irfanview` before editing — they carry the trickiest behavior.
-- **Thread safety:** `resolve_irfanview()` uses `threading.Lock` to ensure cache initialization is atomic. `convert_folder_batch()` uses `ThreadPoolExecutor` to safely parallelize folder conversions.
-- **No external deps:** Keep it stdlib-only for easy deployment and minimal attack surface.
+- **Production is Windows-only.** WSL/Linux can only run the unit tests — no IrfanView, no `mbcs`, no `winreg`, no PowerShell `.lnk` resolution.
+- **Anti-bot trap:** official `irfanview.info` `/files/*.zip` URLs return an HTML "Click again to start Download" page first. `_download_verified` detects it and re-fetches the real href with a `Referer` header. Do not "simplify" this away.
+- **Stale-cache fallback:** if download fails but a previous cache exists, `ensure_irfanview` uses it rather than failing outright.
+- **DLL relocation:** the plugins ZIP puts `PDF.dll` at its root; `_relocate_plugin_dlls` moves root-level DLLs into `Plugins/` or IrfanView will not find them.
+- **zip-slip guard:** `_extract_zip` validates every member against `dest_dir.resolve()` before `extractall`. Keep the `relative_to` check.
+- **Tests import via `importlib`** from a relative path so they run on Linux; keep test logic host-agnostic and patch module globals (`OUTPUT_DIR`, `PDF_INI_DIR`, `PDF_COMPRESSION`) with save/restore rather than writing into the repo.
+- **LSP caveat:** an LSP reports false "instance variable not initialized" / "cannot assign to ModuleType" errors on this codebase — that is the established `setUp` + `importlib` pattern, not a real defect.
 
 ## TEST COVERAGE
 
-21 unit tests in `test_folder_to_pdf.py`:
-- ✅ Natural sort logic (numeric, case-insensitive)
-- ✅ Image collection (top-level only, extension filtering, natural sort)
-- ✅ Command building (short list direct, long list filelist fallback)
-- ✅ Subfolder detection (batch mode, natural sort)
-- ✅ IrfanView override mechanism
-- ✅ Failed conversion cannot be mistaken for an old PDF
-- ✅ ZIP path traversal protection
-- ✅ Unknown launcher versions require explicit verification opt-out
+29 tests, `test_folder_to_pdf.py`:
+- Natural sort (numeric, case-insensitive)
+- Image collection (top-level only, extension filter, natural sort)
+- Command building — short direct **and** long filelist fallback, both carrying `/ini=`
+- Subfolder detection for batch mode
+- IrfanView override mechanism
+- Failed conversion cannot be mistaken for a stale PDF
+- ZIP path traversal rejection; unknown launcher version requires `--no-verify`
+- `ini_encoding()` returns a codec Python can resolve
+- `apply_pdf_compression()` — INI name follows exe bitness (`i_view64`/`i_view32`), contains `[PDF]` + all three `Compr*` keys, creates its dir, leaves no `.tmp` residue
 
-Run:
-```bash
-python -m unittest test_folder_to_pdf -v
-```
-
-## RECENT CHANGES (v2.0)
-
-- **Added** `class TUIProgressGrid` for real-time progress rendering.
-- **Added** `class TaskStatus` for emoji constants.
-- **Added** `convert_folder_batch()` function for parallel batch processing.
-- **Added** memory caching to `resolve_irfanview()` with `threading.Lock`.
-- **Modified** `convert_folder()` to dispatch single vs. batch mode cleanly.
-- **Modified** `main()` to set up Windows console size for TUI.
-- Maintained backward compatibility: single-folder mode unchanged, API unchanged.
-
-## FUTURE WORK
-
-- Color output (emoji is enough for now, but could add ANSI colors for status indicators).
-- Persistent config file (instead of editing code constants).
-- Logging to file (for debugging batch runs).
-- Async I/O (replace ThreadPoolExecutor with asyncio for further optimization).
-- Web UI (Flask/FastAPI for headless servers).
+**Untested by design:** anything requiring the real IrfanView binary. The `/ini=` mechanism
+was verified manually end-to-end (real `cmd.exe` + real plugin, exe-adjacent INI deliberately
+set to Flate to prove `/ini` precedence).
