@@ -3,7 +3,7 @@
 """便携版启动器：自动下载/更新 IrfanView-64 便携版到本地缓存，然后运行主脚本。
 
 - 只从官方 irfanview.info 域名下载，不违反 EULA（非重分发，而是首次运行时下载官方包）。
-- 缓存目录：%LOCALAPPDATA%/Images-to-PDF/irfanview/（Linux/WSL 用 ~/.local/share）。
+- 缓存目录：%TEMP%/Images-to-PDF/irfanview/（用完即弃；Linux/WSL 用 ~/.local/share）。
 - 通过 SHA-256 校验下载文件，解压后调用 folder_to_pdf.py。
 - 联网且未缓存 → 自动下载。已缓存 → 直接用。离线但已缓存 → 直接用。
 

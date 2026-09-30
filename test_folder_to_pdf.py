@@ -107,12 +107,16 @@ class TestCollectImages(unittest.TestCase):
 
 
 class TestBuildMultipdfCmd(unittest.TestCase):
-    """命令构建：短列表直传 CLI；长列表回退 filelist（ANSI 编码）。"""
+    """命令构建：短列表直传 CLI；长列表回退 filelist（ANSI 编码）。
+
+    两个分支都用 limit 参数显式驱动，不依赖本机路径长度——否则测试会在
+    不同用户名/安装路径的机器上时红时绿。
+    """
 
     def test_short_direct_list(self):
         out = Path(r"C:\out\out.pdf")
         imgs = [Path(r"C:\img\a.jpg"), Path(r"C:\img\b.jpg")]
-        cmd, tmp = build_multipdf_cmd(Path("i_view64.exe"), out, imgs)
+        cmd, tmp = build_multipdf_cmd(Path("i_view64.exe"), out, imgs, limit=10 ** 6)
         self.assertIsNone(tmp)
         self.assertIn("/multipdf=", cmd)
         self.assertIn('"C:\\img\\a.jpg"', cmd)
@@ -120,11 +124,10 @@ class TestBuildMultipdfCmd(unittest.TestCase):
         self.assertTrue(cmd.endswith("/cmdexit"))
 
     def test_long_list_falls_back_to_filelist(self):
-        # 构造超过 3800 字符的路径列表（长路径 + 大量文件）
+        # limit=1 强制走回退分支（真实路径长度无关）
         out = Path(r"C:\out\out.pdf")
-        long_path = r"C:\VeryLongDirectoryNameToPushLengthOverLimit" + "\\" * 5 + "image"
-        imgs = [Path(long_path + f"_{i}.jpg") for i in range(60)]
-        cmd, tmp = build_multipdf_cmd(Path("i_view64.exe"), out, imgs)
+        imgs = [Path(r"C:\img\image_%d.jpg" % i) for i in range(60)]
+        cmd, tmp = build_multipdf_cmd(Path("i_view64.exe"), out, imgs, limit=1)
         self.assertIsNotNone(tmp)
         self.assertIn("filelist=", cmd)
         # 文件列表存在且每个路径一行
@@ -137,7 +140,7 @@ class TestBuildMultipdfCmd(unittest.TestCase):
         os.unlink(tmp)
 
     def test_normal_paths_stay_direct_when_short(self):
-        # 短路径总长 <3800 应走直传（不含 filelist=），且空格路径不崩溃、引号保留
+        # 短路径应走直传（不含 filelist=），且空格路径不崩溃、引号保留
         out = Path(r"C:\out space\out.pdf")
         imgs = [Path(r"C:\img space\a.jpg")]
         cmd, tmp = build_multipdf_cmd(Path(r"C:\Program Files\IrfanView\i_view64.exe"), out, imgs)
@@ -219,7 +222,17 @@ class TestIrfanviewOverride(unittest.TestCase):
 
 
 class TestConversionResult(unittest.TestCase):
-    """转换失败时不能把旧 PDF 误判为成功。"""
+    """转换失败时不能把旧 PDF 误判为成功；异常路径不留临时文件。"""
+
+    def setUp(self):
+        # convert_folder 会写 INI，重定向到临时目录，测试不污染仓库。
+        self.tmp = tempfile.TemporaryDirectory()
+        self.orig_ini_dir = folder_to_pdf.PDF_INI_DIR
+        folder_to_pdf.PDF_INI_DIR = Path(self.tmp.name) / ".irfanview_ini"
+
+    def tearDown(self):
+        folder_to_pdf.PDF_INI_DIR = self.orig_ini_dir
+        self.tmp.cleanup()
 
     def test_failed_process_does_not_return_existing_pdf(self):
         with tempfile.TemporaryDirectory() as tmp_name:
@@ -245,6 +258,45 @@ class TestConversionResult(unittest.TestCase):
                 self.assertFalse(old_pdf.exists())
             finally:
                 folder_to_pdf.OUTPUT_DIR = original_output
+
+    def test_subprocess_errors_do_not_leak_temp_files(self):
+        """subprocess.run 抛异常（如超时）时，临时列表文件也必须被清掉。"""
+        for exc in (
+            subprocess.TimeoutExpired(cmd="i_view64.exe", timeout=600),
+            OSError("boom"),
+        ):
+            with tempfile.TemporaryDirectory() as tmp_name:
+                folder = Path(tmp_name) / "images"
+                folder.mkdir()
+                for i in range(3):
+                    (folder / ("%d.jpg" % i)).write_bytes(b"x")
+                output_dir = Path(tmp_name) / "output"
+                output_dir.mkdir()
+
+                original_output = folder_to_pdf.OUTPUT_DIR
+                created = []
+                real_build = folder_to_pdf.build_multipdf_cmd
+
+                def spy_build(irfan, out_pdf, imgs, **kw):
+                    cmd, tmp_list = real_build(irfan, out_pdf, imgs, limit=1)
+                    created.append(tmp_list)
+                    return cmd, tmp_list
+
+                folder_to_pdf.OUTPUT_DIR = output_dir
+                try:
+                    with patch.object(folder_to_pdf, "build_multipdf_cmd", spy_build), \
+                         patch.object(folder_to_pdf, "resolve_irfanview",
+                                      return_value=Path("i_view64.exe")), \
+                         patch.object(folder_to_pdf, "check_pdf_plugin", return_value=None), \
+                         patch.object(folder_to_pdf.subprocess, "run", side_effect=exc):
+                        self.assertIsNone(
+                            folder_to_pdf.convert_folder(str(folder))
+                        )
+                finally:
+                    folder_to_pdf.OUTPUT_DIR = original_output
+
+                self.assertTrue(created and created[0])
+                self.assertFalse(os.path.exists(created[0]))
 
 
 class TestLauncherSafety(unittest.TestCase):
@@ -360,11 +412,11 @@ class TestBuildMultipdfCmdWithIni(unittest.TestCase):
         self.tmp.cleanup()
 
     def test_short_direct_list_contains_ini(self):
-        # Given: 短路径列表（总长 <3800）
+        # Given: 强制直传分支
         out = Path(r"C:\out\out.pdf")
         imgs = [Path(r"C:\img\a.jpg"), Path(r"C:\img\b.jpg")]
         # When: 调用 build_multipdf_cmd()
-        cmd, tmp = build_multipdf_cmd(Path("i_view64.exe"), out, imgs)
+        cmd, tmp = build_multipdf_cmd(Path("i_view64.exe"), out, imgs, limit=10 ** 6)
         # Then: 命令包含 /ini=，且无 filelist 回退
         self.assertIsNone(tmp)
         self.assertIn("/ini=", cmd)
@@ -373,12 +425,11 @@ class TestBuildMultipdfCmdWithIni(unittest.TestCase):
         self.assertTrue(cmd.endswith("/cmdexit"))
 
     def test_long_list_fallback_contains_ini_and_filelist(self):
-        # Given: 超过 3800 字符的长路径列表
+        # Given: 强制回退分支
         out = Path(r"C:\out\out.pdf")
-        long_path = r"C:\VeryLongDirectoryNameToPushLengthOverLimit" + "\\" * 5 + "image"
-        imgs = [Path(long_path + f"_{i}.jpg") for i in range(60)]
+        imgs = [Path(r"C:\img\image_%d.jpg" % i) for i in range(60)]
         # When: 调用 build_multipdf_cmd()
-        cmd, tmp = build_multipdf_cmd(Path("i_view64.exe"), out, imgs)
+        cmd, tmp = build_multipdf_cmd(Path("i_view64.exe"), out, imgs, limit=1)
         # Then: 命令同时包含 /ini= 和 filelist=
         self.assertIsNotNone(tmp)
         self.assertIn("/ini=", cmd)

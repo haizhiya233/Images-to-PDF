@@ -16,6 +16,7 @@ Turn image folders into multi-page PDFs — powered by IrfanView's `/multipdf` c
 - 🗜️ **体积可控** — 自动把 PDF 插件切到 JPEG 压缩，输出约为素材的 **1.1 倍**（IrfanView 默认的 Flate 无损会膨胀 **4~17 倍**）
 - 🔧 **智能探测** — 5 种策略自动定位 IrfanView
 - 📦 **便携模式** — 免安装 IrfanView，自动下载官方包到临时缓存（退出即清）
+- 🧯 **不吞错误** — 输出重定向到管道/日志时也不因 emoji 崩溃；临时文件在超时后同样会清理
 
 ## Supported formats / 支持格式
 
@@ -24,7 +25,7 @@ Turn image folders into multi-page PDFs — powered by IrfanView's `/multipdf` c
 ## Requirements / 环境要求
 
 - **Windows** 10+
-- **Python 3.7+**（仅标准库，无需 pip install）
+- **Python 3.7+**（仅标准库，无需 pip install；已在 3.14 上验证）
 - **IrfanView 64** + 官方 **PDF 插件**（`Plugins/PDF.dll`）— 或用便携模式自动获取
 
 ## Quick Start / 快速开始
@@ -95,7 +96,12 @@ MAX_WORKERS = 16                  # 批量并行线程数（默认 16）
 GRID_WIDTH = 8                    # TUI 网格每行方格数
 PDF_COMPRESSION = 2               # PDF 压缩：1=Flate 2=q95 3=q80 4=q65 5=q40
 PDF_INI_DIR = Path(__file__).parent / ".irfanview_ini"   # IrfanView 配置目录
+CMD_LENGTH_LIMIT = 3800           # 命令行超过此长度就改用临时文件列表
 ```
+
+> `CMD_LENGTH_LIMIT` 平时不用动。图片路径总长超过它就自动回退到写一份临时
+> 文件列表（`filelist=`）并把路径逐行写进去，因此**路径再长、中文再多也能处理**。
+> 3800 是保守值，离 `cmd.exe` 的 8191 上限留了足够余量。
 
 ## Portable Mode / 便携模式
 
@@ -115,8 +121,10 @@ python launcher.py --cleanup     # 手动清理缓存
 ## Tests / 测试
 
 ```bash
-python -m unittest test_folder_to_pdf -v   # 29 个测试
+python -m unittest test_folder_to_pdf -v   # 30 个测试
 ```
+
+测试不依赖 IrfanView，Linux / WSL 上同样可以运行（真实转换仍仅限 Windows）。
 
 ## License / 许可证
 

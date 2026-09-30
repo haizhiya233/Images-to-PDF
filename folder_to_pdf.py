@@ -50,6 +50,10 @@ PDF_COMPRESSION = 2
 # IrfanView 配置目录（存放 i_viewNN.ini，通常无需改动）
 PDF_INI_DIR = Path(__file__).parent / ".irfanview_ini"
 
+# 命令行长度上限：超过就改用 filelist= 临时文件传图片列表。
+# cmd.exe 的实际上限是 8191 字符，这里留足余量（长路径 + 中文路径 + 转义）。
+CMD_LENGTH_LIMIT = 3800
+
 # ===============================================
 
 
@@ -81,9 +85,43 @@ class TaskStatus:
 
 
 def set_irfanview_override(path):
-    """外部设置 IrfanView 可执行文件的偏好路径（便携版用），可传 None 清除。"""
-    global _irfanview_override
+    """外部设置 IrfanView 可执行文件的偏好路径（便携版用），可传 None 清除。
+
+    同时作废已缓存的探测结果，否则改路径后 resolve_irfanview() 仍会返回旧缓存。
+    """
+    global _irfanview_override, _irfanview_cache
     _irfanview_override = str(path) if path else None
+    _irfanview_cache = None
+
+
+def _setup_console():
+    """让控制台输出在非 UTF-8 代码页下也不会因 emoji 崩溃。
+
+    交互式 cmd 窗口下 Python 走 WriteConsoleW，emoji 正常显示；但输出被重定向到
+    管道/文件时（被别的工具调用、日志重定向），流会按系统代码页编码，中文环境下
+    就是 GBK —— 打印 ⏳/✅/❌/✓ 会抛 UnicodeEncodeError，把真正的错误信息盖掉。
+    这里把 errors 放宽为 replace：宁可丢一个 emoji，也不能吞掉错误原因。
+    """
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(errors="replace")
+        except (AttributeError, ValueError, OSError):
+            pass
+
+
+def _safe_print(text):
+    """打印含 emoji 的状态行；即便调用方没走 main()（被导入、被测试直接调用）也不会崩。
+
+    stdout 为 None 时（pythonw / 无控制台的 .pyw 启动）print 抛 AttributeError 而非
+    UnicodeEncodeError，一并吞掉——工具本身不依赖控制台。
+    """
+    try:
+        print(text)
+    except UnicodeEncodeError:
+        enc = getattr(sys.stdout, "encoding", None) or "ascii"
+        print(text.encode(enc, "replace").decode(enc, "replace"))
+    except AttributeError:
+        pass
 
 
 def natural_key(name):
@@ -161,7 +199,6 @@ def resolve_irfanview():
                 return cand
         
         # 4. PATH
-        import shutil
         for name in ("i_view64.exe", "i_view32.exe"):
             found = shutil.which(name)
             if found:
@@ -234,18 +271,17 @@ def collect_images(folder):
     return imgs
 
 
-def build_multipdf_cmd(irfan, output_pdf, image_paths):
+def build_multipdf_cmd(irfan, output_pdf, image_paths, limit=CMD_LENGTH_LIMIT):
     """构建 IrfanView /multipdf 命令行整串（用于 shell=True 调用）。
 
-    命令行总长超过 3800 字符时，回退到写临时 ANSI 编码文件列表（filelist=）。
+    命令行总长超过 limit 时，回退到写临时 ANSI 编码文件列表（filelist=）。
     返回 (cmd_string, temp_listfile_or_None)。
     """
+    ini_opt = f'/ini="{PDF_INI_DIR}"'
     quoted = ",".join(f'"{p}"' for p in image_paths)
     direct = f'/multipdf=("{output_pdf}",{quoted})'
-    ini_opt = f'/ini="{PDF_INI_DIR}"'
-    full_len = len(str(irfan)) + 1 + len(direct) + len(" /cmdexit") + len(ini_opt) + 1
-    if full_len <= 3800:
-        cmd = f'"{irfan}" {direct} {ini_opt} /cmdexit'
+    cmd = f'"{irfan}" {direct} {ini_opt} /cmdexit'
+    if len(cmd) <= limit:
         return cmd, None
 
     # 回退到 filelist
@@ -384,7 +420,7 @@ def convert_folder_batch(folder, irfan):
     success = sum(1 for r in grid.results if r == TaskStatus.SUCCESS)
     failed = sum(1 for r in grid.results if r == TaskStatus.FAILED)
     
-    print(f"\n✓ 批量处理完成：成功 {success} 个，失败 {failed} 个。")
+    _safe_print(f"\n✓ 批量处理完成：成功 {success} 个，失败 {failed} 个。")
 
 
 def convert_folder(raw):
@@ -398,11 +434,11 @@ def convert_folder(raw):
 
         # 只探测一次 IrfanView（后续调用直接返回缓存）
         irfan = resolve_irfanview()
-        print(f"\n✓ IrfanView: {irfan}")
+        _safe_print(f"\n✓ IrfanView: {irfan}")
         check_pdf_plugin(irfan.parent)
         ini_path = apply_pdf_compression(irfan)
         label = PDF_COMPRESSION_LABELS.get(PDF_COMPRESSION, f"未知({PDF_COMPRESSION})")
-        print(f"✓ PDF 压缩已设置：{label} (INI: {ini_path})")
+        _safe_print(f"✓ PDF 压缩已设置：{label} (INI: {ini_path})")
 
         subdirs = subfolders_with_images(folder)
         if subdirs:
@@ -424,28 +460,31 @@ def convert_folder(raw):
         cmd, tmp_list = build_multipdf_cmd(irfan, output_pdf, images)
 
         print("正在调用 IrfanView 生成 PDF ...")
-        result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=600)
-
-        if tmp_list:
-            try:
-                os.unlink(tmp_list)
-            except Exception:
-                pass
+        try:
+            result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=600)
+        finally:
+            # 超时/异常时也要清掉临时列表文件（与批量模式保持一致）。
+            if tmp_list:
+                try:
+                    os.unlink(tmp_list)
+                except OSError:
+                    pass
 
         if result.returncode == 0 and output_pdf.exists() and output_pdf.stat().st_size > 0:
-            print("\n✅ 生成成功！")
+            _safe_print("\n✅ 生成成功！")
             print(f"   输出文件：{output_pdf}")
             print(f"   页数（图片数）：{len(images)}")
         else:
             stderr = (result.stderr or "")[-400:]
-            print(f"\n❌ 生成失败：{stderr}")
+            _safe_print(f"\n❌ 生成失败：{stderr}")
 
     except Exception as e:
-        print(f"\n❌ 出错了：{e}")
+        _safe_print(f"\n❌ 出错了：{e}")
 
 
 def main():
     import argparse
+    _setup_console()
     parser = argparse.ArgumentParser(description="图片合并成 PDF 工具（TUI 版本）")
     parser.add_argument("--irfanview-path", help="指定 i_view64.exe 路径")
     parser.add_argument("folder", nargs="?", help="直接传入文件夹路径")
@@ -482,7 +521,7 @@ def main():
             print("\n已退出。")
             break
         except Exception as e:
-            print(f"\n❌ 出错：{e}")
+            _safe_print(f"\n❌ 出错：{e}")
 
 
 if __name__ == "__main__":

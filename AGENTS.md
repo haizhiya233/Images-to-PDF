@@ -1,7 +1,7 @@
 # PROJECT KNOWLEDGE BASE
 
-**Generated:** 2026-09-25  
-**Commit:** 59ba91b  
+**Generated:** 2026-09-30  
+**Baseline commit:** e279d5b (state described here)  
 **Branch:** main
 
 ## OVERVIEW
@@ -16,7 +16,7 @@ portable wrapper that downloads IrfanView to a throwaway `%TEMP%` cache.
 Images-to-PDF/
 ├── folder_to_pdf.py        # core app: TUI + parallel batch + caching
 ├── launcher.py             # portable launcher: download/extract IrfanView cache
-├── test_folder_to_pdf.py   # unittest suite (29 tests)
+├── test_folder_to_pdf.py   # unittest suite (30 tests)
 ├── README.md               # comprehensive usage docs (zh/en)
 ├── AGENTS.md               # this file
 └── LICENSE                 # MIT
@@ -30,22 +30,24 @@ Single flat module — no packages, no subdirectories.
 
 | Symbol | Type | Location | Refs | Role |
 |--------|------|----------|------|------|
-| `main` | func | :438 | 1 | console loop (non-closing); argparse `--irfanview-path`/folder |
-| `convert_folder` | func | :381 | 1 | dispatcher: subdirs-with-images → batch, else single PDF; **applies compression INI** |
-| `convert_folder_batch` | func | :345 | 1 | ThreadPoolExecutor(MAX_WORKERS), live TUI grid |
-| `convert_single_folder` | func | :265 | 1 | per-folder conversion via `executor.submit`; silent (no console output) |
-| `subfolders_with_images` | func | :294 | 2 | image-bearing subdirs, natural-sorted |
-| `prompt_folder` | func | :255 | 1 | drag-and-drop prompt; exits on `exit`/`quit`/`q`/empty |
-| `build_multipdf_cmd` | func | :228 | 2 | **shell STRING** + `/ini=`; filelist fallback >3800 chars |
-| `collect_images` | func | :214 | 2 | image gather, top-level only, natural sort |
-| `apply_pdf_compression` | func | :192 | 1 | atomically writes tool-owned `i_viewNN.ini` (`[PDF]` Compr* keys) |
-| `check_pdf_plugin` | func | :181 | 1 | requires `Plugins/PDF.dll` |
-| `ini_encoding` | func | :88 | 2 | `mbcs` on Windows, else system default; shared by INI + filelist writers |
-| `resolve_irfanview` | func | :98 | 1 | 5-strategy detection; cached to `_irfanview_cache` |
-| `set_irfanview_override` | func | :74 | 1 | portable path injection; sets `_irfanview_override` |
-| `natural_key` | func | :80 | 2 | numeric-aware sort key (`2` before `10`) |
-| **class TaskStatus** | enum-like | :68 | - | status emoji constants (⏳/✅/❌) |
-| **class TUIProgressGrid** | class | :304 | 1 | renders progress, percentage, ETA, emoji grid |
+| `main` | func | :479 | 1 | console loop (non-closing); argparse `--irfanview-path`/folder |
+| `convert_folder` | func | :420 | 1 | dispatcher: subdirs-with-images → batch, else single PDF; **applies compression INI** |
+| `convert_folder_batch` | func | :384 | 1 | ThreadPoolExecutor(MAX_WORKERS), live TUI grid |
+| **class TUIProgressGrid** | class | :343 | 1 | renders progress, percentage, ETA, emoji grid |
+| `convert_single_folder` | func | :304 | 1 | per-folder conversion via `executor.submit`; silent (no console output) |
+| `subfolders_with_images` | func | :333 | 2 | image-bearing subdirs, natural-sorted |
+| `prompt_folder` | func | :294 | 1 | drag-and-drop prompt; exits on `exit`/`quit`/`q`/empty |
+| `build_multipdf_cmd` | func | :268 | 2 | **shell STRING** + `/ini=`; filelist fallback when `len(cmd) > limit` (default `CMD_LENGTH_LIMIT`) |
+| `collect_images` | func | :254 | 2 | image gather, top-level only, natural sort |
+| `apply_pdf_compression` | func | :232 | 1 | atomically writes tool-owned `i_viewNN.ini` (`[PDF]` Compr* keys) |
+| `check_pdf_plugin` | func | :221 | 1 | requires `Plugins/PDF.dll` |
+| `resolve_irfanview` | func | :139 | 1 | 5-strategy detection; cached to `_irfanview_cache` |
+| `ini_encoding` | func | :129 | 2 | `mbcs` on Windows, else system default; shared by INI + filelist writers |
+| `natural_key` | func | :121 | 2 | numeric-aware sort key (`2` before `10`) |
+| `_safe_print` | func | :112 | 1 | emoji-safe `print` for every status line (see encoding note below) |
+| `_setup_console` | func | :97 | 1 | widens stdout/stderr `errors`; called at top of `main()` |
+| `set_irfanview_override` | func | :87 | 1 | portable path injection; sets `_irfanview_override` **and invalidates `_irfanview_cache`** |
+| **class TaskStatus** | enum-like | :81 | - | status emoji constants (⏳/✅/❌) |
 
 ### launcher.py (Portable Mode)
 
@@ -74,7 +76,7 @@ Single flat module — no packages, no subdirectories.
 - **No third-party deps — stdlib only** (no Pillow/pypdf/typer/rich). Tests use `unittest`, not pytest.
 - Console output is Chinese (zh-CN) — keep it localized.
 - snake_case, one responsibility per function.
-- Global state: `_irfanview_cache`, `_irfanview_lock` (thread-safe), `_irfanview_override`.
+- Global state: `_irfanview_cache`, `_irfanview_lock` (thread-safe), `_irfanview_override` (setting it clears the cache).
 
 ## PDF OUTPUT SIZE (the `/ini=` mechanism)
 
@@ -87,7 +89,7 @@ The plugin has **no CLI switch** for this, but reads it from an INI: section `[P
 `ComprColor` / `ComprGray` / `ComprBW`. It also honours `/ini="Folder"` to relocate INI
 read/write, which **takes precedence** over the INI beside the exe and needs no admin rights.
 `apply_pdf_compression()` writes that INI; `build_multipdf_cmd()` injects `/ini=` into both
-the direct and the filelist branch (and counts it in the 3800-char budget).
+the direct and the filelist branch (and counts it in the length budget).
 
 | `PDF_COMPRESSION` | Plugin setting | Measured vs source |
 |---|---|---|
@@ -123,6 +125,8 @@ GIF, CMYK/16-bit PNG). Poor trade against q95's 1.14x.
 - **NEVER remove the `_irfanview_lock`** in `resolve_irfanview()` — multiple threads may call it during batch; lock ensures first caller initializes cache, others wait.
 - Do NOT introduce third-party deps (natsort, Pillow, PyPDF2, tqdm) — stdlib only.
 - **NEVER reuse a SHA-256 for another IrfanView version** — add the version to `VERSION_SHA256`, or require explicit `--no-verify`.
+- **NEVER print a status line with raw `print()`** if it contains ⏳/✅/❌/✓ — use `_safe_print()`. A redirected run on a zh-CN console encodes to GBK, and the failure happens *inside* an `except` block, replacing the real error message with `UnicodeEncodeError`.
+- **NEVER delete the temp filelist outside a `finally`** in `convert_folder()`. `subprocess.run` can raise (`TimeoutExpired`, `OSError`) rather than return, and the file would leak in `%TEMP%`.
 
 ## UNIQUE STYLES
 
@@ -130,13 +134,14 @@ GIF, CMYK/16-bit PNG). Poor trade against q95's 1.14x.
 - **Batch = `ThreadPoolExecutor` + `as_completed()`**; each completion mutates `grid.results[idx]` and re-renders percentage/ETA/emoji. Completion order, not submission order.
 - **Natural sort** without natsort: `re.split(r"(\d+)", name)`, digits cast to `int`, alpha lowercased.
 - **IrfanView detection order** (first hit wins): desktop `.lnk` target → `Program Files` 64/32 → `PATH` → `HKCU\Software\IrfanView` registry. The `.lnk` path is first because installs often live outside `Program Files`.
-- **Filelist fallback** when the command exceeds 3800 chars: temp `.txt` in `mbcs` (Chinese paths), deleted after `subprocess.run`.
+- **Filelist fallback** when the command exceeds `CMD_LENGTH_LIMIT` (3800, vs cmd.exe's 8191): temp `.txt` in `mbcs` (Chinese paths), deleted in a `finally` so a timeout cannot leak it.
 - **Console output is Chinese**, including error text and the compression level line.
+- **Emoji safety:** status lines go through `_safe_print()`, and `_setup_console()` widens `errors` on stdout/stderr. Interactive cmd renders emoji via `WriteConsoleW`, but a redirected/piped run on a zh-CN locale would otherwise raise `UnicodeEncodeError` **from inside an `except` block** and mask the real error.
 
 ## COMMANDS
 
 ```bash
-python -m unittest test_folder_to_pdf -v          # 29 tests, runs on Linux+Windows
+python -m unittest test_folder_to_pdf -v          # 30 tests, runs on Linux+Windows
 python -m py_compile folder_to_pdf.py launcher.py test_folder_to_pdf.py
 
 python folder_to_pdf.py                          # interactive: drag folder, Enter
@@ -161,9 +166,12 @@ MAX_WORKERS = 16                                            # batch threads
 GRID_WIDTH = 8                                              # TUI cells per row
 PDF_COMPRESSION = 2                                         # 1=Flate 2=q95 3=q80 4=q65 5=q40
 PDF_INI_DIR = Path(__file__).parent / ".irfanview_ini"      # tool-owned IrfanView INI dir
+CMD_LENGTH_LIMIT = 3800                                     # > this many chars → filelist=
 ```
 
-`.irfanview_ini/` is created at runtime and is **not** in `.gitignore` (no .gitignore exists).
+`.irfanview_ini/` is created at runtime and **is** covered by `.gitignore` (as are
+`__pycache__/` and `*.py[cod]`). `CMD_LENGTH_LIMIT` sits well under cmd.exe's ~8191-char
+ceiling on purpose, leaving room for long/Unicode paths.
 
 ## NOTES FOR MAINTAINERS
 
@@ -177,13 +185,17 @@ PDF_INI_DIR = Path(__file__).parent / ".irfanview_ini"      # tool-owned IrfanVi
 
 ## TEST COVERAGE
 
-29 tests, `test_folder_to_pdf.py`:
+30 tests, `test_folder_to_pdf.py`:
 - Natural sort (numeric, case-insensitive)
 - Image collection (top-level only, extension filter, natural sort)
-- Command building — short direct **and** long filelist fallback, both carrying `/ini=`
+- Command building — short direct **and** filelist fallback, both carrying `/ini=`. The two
+  branches are selected via the `limit` argument (`limit=1` / `limit=10**6`), **not** by
+  crafting paths near 3800 chars: that made the test pass or fail depending on the machine's
+  username/install path length.
 - Subfolder detection for batch mode
-- IrfanView override mechanism
+- IrfanView override mechanism (including that clearing the override re-probes)
 - Failed conversion cannot be mistaken for a stale PDF
+- **`subprocess.run` raising (`TimeoutExpired`/`OSError`) still deletes the temp filelist**
 - ZIP path traversal rejection; unknown launcher version requires `--no-verify`
 - `ini_encoding()` returns a codec Python can resolve
 - `apply_pdf_compression()` — INI name follows exe bitness (`i_view64`/`i_view32`), contains `[PDF]` + all three `Compr*` keys, creates its dir, leaves no `.tmp` residue

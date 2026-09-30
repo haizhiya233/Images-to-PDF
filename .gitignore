@@ -1,3 +1,6 @@
-
 # IrfanView 运行时生成的配置（每次转换都会重建）
 .irfanview_ini/
+
+# Python 字节码缓存
+__pycache__/
+*.py[cod]
