@@ -113,14 +113,19 @@ jobs:
           {
             echo "### 构建失败诊断"
             echo
+            echo "#### 磁盘用量（p4a 交叉编译很容易撑满）"
+            echo '```'
+            df -h / /github/workspace 2>/dev/null || df -h
+            echo '```'
+            echo
             if [ ! -f "$LOG" ]; then
               echo "没有生成日志文件（构建可能在前置自检就挂了）。"
             else
-              echo "日志大小: \`$(wc -c < "$LOG")\` 字节, \`$(wc -l < "$LOG")\` 行"
+              echo "#### 日志大小: \`$(wc -c < "$LOG")\` 字节, \`$(wc -l < "$LOG")\` 行"
               echo
               echo "#### 匹配到的错误行"
               echo '```'
-              grep -nE "FAILURE:|ERROR:|error:|^Traceback|^Exception|Error:|Exception:|command failed|failed with|DeprecationWarning: .*will be removed|No matching distribution|not found|Could not|Unable to" "$LOG" \
+              grep -nE "FAILURE:|ERROR:|error:|^Traceback|^Exception|Error:|Exception:|command failed|failed with|No matching distribution|not found|Could not|Unable to|No space left|Killed" "$LOG" \
                 | tail -40 || echo "(没匹配到典型错误行，请看下方原始尾部)"
               echo '```'
               echo
@@ -129,6 +134,19 @@ jobs:
               tail -50 "$LOG"
               echo '```'
             fi
+            echo
+            echo "#### p4a 进展到哪个 dist"
+            echo '```'
+            # 每个 dist 一个目录，名字就是正在构建的 distribution（如
+            # python3、kivy、pillow）。最后一个非空的就是失败点。
+            if [ -d mobile/.buildozer ]; then
+              du -sh mobile/.buildozer 2>/dev/null
+              find mobile/.buildozer -maxdepth 3 -type d -name build -printf '%T@ %p\n' 2>/dev/null \
+                | sort -n | tail -12 | cut -d' ' -f2-
+            else
+              echo "(mobile/.buildozer 不存在 —— 还没进入 p4a 构建阶段)"
+            fi
+            echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
       # if-no-files-found: error 保证「构建成功但没产出 APK」不会被静默放过。
