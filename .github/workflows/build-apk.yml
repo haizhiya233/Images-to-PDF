@@ -99,6 +99,38 @@ jobs:
           path: mobile/build-apk.log
           if-no-files-found: warn
 
+      # spec 里 log_level = 2 会输出全部子进程命令，几十 MB 起，GitHub 直接
+      # 截断日志页 —— 于是连失败原因都被挤出可视范围（只剩一句
+      # "Process completed with exit code 1"）。raw log 要下载+解压才能看，
+      # 排查成本太高。
+      #
+      # 所以把关键信息抽出来写进 Job Summary：它渲染在 run 页面正文里，
+      # 未登录也能直接看。这是唯一能让"打开页面就知道死在哪"的地方。
+      - name: Summarize failure
+        if: failure()
+        run: |
+          LOG=mobile/build-apk.log
+          {
+            echo "### 构建失败诊断"
+            echo
+            if [ ! -f "$LOG" ]; then
+              echo "没有生成日志文件（构建可能在前置自检就挂了）。"
+            else
+              echo "日志大小: \`$(wc -c < "$LOG")\` 字节, \`$(wc -l < "$LOG")\` 行"
+              echo
+              echo "#### 匹配到的错误行"
+              echo '```'
+              grep -nE "FAILURE:|ERROR:|error:|^Traceback|^Exception|Error:|Exception:|command failed|failed with|DeprecationWarning: .*will be removed|No matching distribution|not found|Could not|Unable to" "$LOG" \
+                | tail -40 || echo "(没匹配到典型错误行，请看下方原始尾部)"
+              echo '```'
+              echo
+              echo "#### 日志最后 50 行"
+              echo '```'
+              tail -50 "$LOG"
+              echo '```'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
       # if-no-files-found: error 保证「构建成功但没产出 APK」不会被静默放过。
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
