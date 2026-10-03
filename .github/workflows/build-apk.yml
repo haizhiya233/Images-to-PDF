@@ -64,13 +64,40 @@ jobs:
           key: apk-${{ runner.os }}-p4a-v1
           restore-keys: apk-${{ runner.os }}-p4a-
 
+      # 前置自检：把「工具链缺失」这类问题在几秒内暴露，而不是等 45 分钟后
+      # 才在编译日志里看到一行误导性的报错。已实测该镜像的
+      # PATH=/home/user/.venv/bin:... 且 openjdk-17-jdk 已内置。
+      - name: Preflight check
+        run: |
+          set -x
+          command -v buildozer
+          buildozer --version
+          command -v java && java -version
+          python3 --version
+          echo "HOME=$HOME  PWD=$(pwd)"
+
       # 首次跑要下 Android SDK/NDK、Gradle 依赖，再交叉编译 Pillow/freetype/
       # jpeg 等原生库，45~60 分钟是正常量级。远超这个数一般是卡在交互式
       # licence 提示或网络上了（spec 里 android.accept_sdk_license = True
       # 就是防前者的）。
+      #
+      # pipefail 是必须的：没有它，tee 会吞掉 buildozer 的退出码，step 永远
+      # 显示成功，日志尾部真正的 error 行反而被当成"构建成功但没产出 APK"。
       - name: Build debug APK with Buildozer
-        run: buildozer -v android debug
+        run: |
+          set -o pipefail
+          buildozer -v android debug 2>&1 | tee build-apk.log
         working-directory: mobile
+
+      # 公开仓库的 Actions 日志页需要登录才能看，排查时拿不到。把自己的日志
+      # 留成 artifact，失败时也能直接下载看，不用截图。
+      - name: Upload build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log
+          path: mobile/build-apk.log
+          if-no-files-found: warn
 
       # if-no-files-found: error 保证「构建成功但没产出 APK」不会被静默放过。
       - name: Upload APK artifact

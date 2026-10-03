@@ -169,10 +169,22 @@ presplash.filename = %(source.dir)s/icon.png
 #       CI 上必须是 2，不然失败了也看不出卡在哪一步。
 log_level = 2
 
-# (bool) 以 root 运行时提示一次。GitHub Actions 的 Docker 容器里就是 root，
-#       但 buildozer-action 会用 BUILDOZER_WARN_ON_ROOT=0 环境变量覆盖掉它
-#       （buildozer 的环境变量优先级高于 spec），所以这里保留 1 不影响 CI。
-warn_on_root = 1
+# (bool) 以 root 运行时提示一次。设为 0 关闭。
+#
+# 必须关掉：CI 的容器里就是 root，而这个提示是**交互式**的 ——
+# check_root() 会 input('Are you sure you want to continue [y/n]? ')，
+# 无头 runner 没有 stdin，直接抛
+#   EOFError: EOF when reading a line
+# 让整个构建在第 8 秒就死掉。
+#
+# 注意：这里原先写着「buildozer-action 会用 BUILDOZER_WARN_ON_ROOT=0 覆盖掉，
+# 所以保留 1 不影响 CI」。那个 action 因为基础镜像已切到 ubuntu:26.04、
+# 其 Dockerfile 里的 add-apt-repository ppa 那步失败而被弃用，CI 改用
+# Kivy 官方镜像当 job 容器（container: 模式不执行镜像 ENTRYPOINT，因而
+# 也不会走镜像里那段 sudo --user user），于是没有任何东西覆盖它了。
+# 查 buildozer 源码也没找到 BUILDOZER_* 前缀覆盖该配置项的依据，
+# 所以直接在 spec 里关掉，不依赖任何外部机制。
+warn_on_root = 0
 
 # 目录默认值（不写就是这两个，写在这里备查）：
 #   build_dir = ./.buildozer     →  mobile/.buildozer   构建中间产物
