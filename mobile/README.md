@@ -35,6 +35,45 @@ p4a 本来就带 Pillow recipe，它已经打进 APK 里了。
 
 ---
 
+## 中文字体（头号风险，装之前先看这节）
+
+**Kivy 的默认字体 Roboto / DejaVu 不含任何 CJK 字形。** 不处理的话，整个中文界面
+会显示成一片豆腐块（□）——界面等于不可用。这是本项目最容易踩且后果最严重的坑。
+
+解决办法是随包分发一个中文字体：`fonts/DroidSansFallback.ttf`。
+
+| 项 | 值 |
+|---|---|
+| 字体 | Droid Sans Fallback（Android 自己的 CJK 回退字体，源自 AOSP） |
+| 许可 | **Apache-2.0**，Google。可合法随应用分发 |
+| 体积 | 3.8 MB |
+| 探测位置 | `main.py` 的 `_FONT_CANDIDATES` 第 3 项，`APP_DIR / "fonts/..."` |
+
+`_resolve_font()` 按候选顺序探测，第一个存在的即用；都找不到就返回 `None`，
+Kivy 回退到默认字体——**这时就是满屏豆腐块**，同时会打一条
+`没找到任何中文字体，界面中文会显示成方块` 的警告日志。首次跑 APK 时
+**务必看 logcat 里有没有这条警告**。
+
+### 两个必须注意的坑
+
+1. **`buildozer.spec` 的 `source.include_exts` 必须含 `ttf`**，否则字体不会被打进
+   APK。当前值 `py,png,jpg,kv,atlas,json,ttf,otf,ttc` 已包含。
+
+2. **别用 `.ttc` 字体集合。** Kivy 的 `Label` 不支持指定 collection 里的 face 索引，
+   SDL_ttf 只会加载 face 0 —— 对NotoSansCJK 来说那通常是**日文字形**，汉字能显示但
+   字形是日式变体，看着不对。所以这里选 `.ttf`（单一字重、简体中文）。
+
+### 打包后字体路径为什么应该是可读的
+
+这条没法在开发环境验证（没有 p4a），但有一条逻辑链：`main.py` 做了
+`sys.path.insert(0, str(APP_DIR))` 然后 `import pdf_engine`。**如果 `APP_DIR`
+不是一个真实可读的目录，App 连启动都做不到。** 而 p4a 是按同一套
+`source.*` 规则把 `.py` 和字体一起铺到那个目录的，所以 `APP_DIR/fonts/` 可读。
+
+即便如此，首次真机跑仍应确认字体真的加载了（看 logcat 有无上述警告）。
+
+---
+
 ## 目录结构
 
 ```
