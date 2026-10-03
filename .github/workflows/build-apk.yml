@@ -24,33 +24,59 @@ jobs:
   build-apk:
     name: Build Android debug APK
     runs-on: ubuntu-latest
-    # 首次跑要下 Android SDK/NDK、Gradle 依赖，再编译 Pillow/freetype/jpeg
-    # 等原生库，45~60 分钟是正常量级；远超这个数一般是卡在交互式 licence
-    # 提示或网络上了（spec 里的 android.accept_sdk_license = True 就是防这个）。
-    timeout-minutes: 60
+
+    # 直接用 Kivy 官方镜像当容器，而不是 ArtemSBulgakov/buildozer-action。
+    #
+    # 为什么不用那个 action：它的 Dockerfile 在官方镜像之上又跑了一遍
+    #   RUN sudo add-apt-repository ppa:openjdk-r/ppa
+    #   RUN sudo apt-get -y install openjdk-17-jdk
+    # 而 kivy/buildozer 的底座已经换成 ubuntu:26.04（且镜像本身**已经**装了
+    # openjdk-17-jdk）。于是那两行既多余又会失败：
+    #   Docker build failed with exit code 1
+    # 该 action 的 PR #47 正是为此提交的（删掉 PPA 那两行），但尚未合并，
+    # 所以不能依赖它 —— 这里直接绕开整个 action。
+    #
+    # 官方镜像已预装：autoconf/automake/cmake/openjdk-17-jdk/python3-pip/
+    # zip/unzip/zlib1g-dev/libtool/libffi-dev/pkg-config/git，
+    # 以及 venv 里的 buildozer 本身。ENV PATH 已含 venv/bin。
+    container:
+      image: ghcr.io/kivy/buildozer:latest
+
+    env:
+      # 镜像里的 venv 与 buildozer 都在 /home/user；不设 HOME 的话缓存和
+      # SDK 路径会落到别处。设成与镜像一致才能命中缓存。
+      HOME: /home/user
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # 官方 Buildozer Docker 镜像 + 自动装 Buildozer、非交互式接受 SDK licence、
-      # 跑完把 bin/ 下的 APK 路径写进 outputs.filename。
-      # workdir 指向 buildozer.spec 所在目录（相对仓库根）。
-      - name: Build debug APK with Buildozer
-        id: buildozer
-        uses: ArtemSBulgakov/buildozer-action@v1
+      # 缓存 p4a 的交叉编译产物：Python 源码包、各依赖的 build 目录，以及
+      # 下载好的 Android SDK/NDK —— 这几样占了绝大部分构建时间。
+      # key 故意不含 buildozer.spec 的哈希：改 spec 通常不影响已缓存的依赖
+      # 产物，而重新下载要十几分钟。
+      - name: Cache p4a toolchain and SDK
+        uses: actions/cache@v4
         with:
-          command: buildozer android debug
-          repository_root: .
-          workdir: mobile
-          buildozer_version: stable
+          path: |
+            /home/user/.buildozer
+            mobile/.buildozer
+          key: apk-${{ runner.os }}-p4a-v1
+          restore-keys: apk-${{ runner.os }}-p4a-
 
-      # path 用 action 吐出来的 outputs.filename（形如 mobile/bin/xxx-debug.apk），
-      # if-no-files-found: error 保证"构建成功但没产出 APK"不会被静默放过。
+      # 首次跑要下 Android SDK/NDK、Gradle 依赖，再交叉编译 Pillow/freetype/
+      # jpeg 等原生库，45~60 分钟是正常量级。远超这个数一般是卡在交互式
+      # licence 提示或网络上了（spec 里 android.accept_sdk_license = True
+      # 就是防前者的）。
+      - name: Build debug APK with Buildozer
+        run: buildozer -v android debug
+        working-directory: mobile
+
+      # if-no-files-found: error 保证「构建成功但没产出 APK」不会被静默放过。
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: Images-to-PDF-debug-apk
-          path: ${{ steps.buildozer.outputs.filename }}
+          path: mobile/bin/*.apk
           if-no-files-found: error
           retention-days: 30
