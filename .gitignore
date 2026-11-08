@@ -4,3 +4,6 @@
 # Python 字节码缓存
 __pycache__/
 *.py[cod]
+
+# 手机端本地测试残留
+.i2p_*
