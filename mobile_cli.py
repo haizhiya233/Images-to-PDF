@@ -16,6 +16,7 @@
 from pathlib import Path
 import argparse
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -77,48 +78,116 @@ def do_list(raw):
     }
 
 
-def do_convert(folder_raw, mode, output, page_size, quality, open_after, log):
+def _chapter_dirs(folder):
+    """单次遍历找出所有「话目录」：自身直接含图片、且没有任何后代目录含图片。
+
+    漫画库结构是 分类/书名/第NNN话/*.jpg；书根只有一个 cover.jpg，
+    按「话」目录切分正好。返回 [(Path, 相对显示名)]，自然序。
+    只做一次 os.walk，不在循环里重复 listdir（FUSE 上很贵）。
+    """
+    folder = Path(folder)
+    with_imgs = []
+    for dirpath, dirnames, filenames in os.walk(folder):
+        dirnames[:] = [d for d in dirnames if not d.startswith(".")]
+        if any(f.lower().endswith(tuple(IMAGE_EXTS)) for f in filenames):
+            with_imgs.append(Path(dirpath))
+
+    # 祖先判定：若某目录是另一个含图目录的严格前缀，则它不是叶子
+    parents = set()
+    for p in with_imgs:
+        for anc in p.parents:
+            if anc in with_imgs and anc != p:
+                parents.add(str(anc))
+            if anc == folder.parent:
+                break
+    leaves = [p for p in with_imgs if str(p) not in parents]
+    leaves.sort(key=lambda p: natural_key(str(p.relative_to(folder))))
+    return [(p, str(p.relative_to(folder))) for p in leaves]
+
+
+def do_convert(folder_raw, mode, output, page_size, quality, open_after, log,
+               recursive=False, skip_existing=False, verbose=False):
     folder = Path(str(folder_raw)).expanduser()
     if not folder.is_dir():
         raise ValueError("不是文件夹：%s" % folder)
 
     if mode == "batch":
-        subs = [s for s in subfolders_with_images(folder)
-                if not s.name.startswith(".")]
-        if not subs:
-            raise ValueError("批量模式下没有找到含图片的子文件夹：%s" % folder)
-        out_dir = Path(str(output or DEFAULT_OUTPUT_DIR)).expanduser()
-        out_dir.mkdir(parents=True, exist_ok=True)
-        pairs = []
-        for sub in subs:
-            imgs = _images_in(sub)
-            if imgs:
-                pairs.append((imgs, out_dir / ("%s.pdf" % sub.name)))
+        if recursive:
+            # 每个话目录一个 PDF，输出目录镜像原目录结构
+            chapters = _chapter_dirs(folder)
+            if not chapters:
+                raise ValueError("递归批量下没有找到含图片的话目录：%s" % folder)
+            out_dir = Path(str(output or DEFAULT_OUTPUT_DIR)).expanduser()
+            out_dir.mkdir(parents=True, exist_ok=True)
+            pairs = []
+            for ch, rel in chapters:
+                imgs = _images_in(ch)
+                dst = out_dir / (rel + ".pdf")
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                pairs.append((imgs, dst, rel))
+        else:
+            subs = [s for s in subfolders_with_images(folder)
+                    if not s.name.startswith(".")]
+            if not subs:
+                raise ValueError("批量模式下没有找到含图片的子文件夹：%s" % folder)
+            out_dir = Path(str(output or DEFAULT_OUTPUT_DIR)).expanduser()
+            out_dir.mkdir(parents=True, exist_ok=True)
+            pairs = []
+            for sub in subs:
+                imgs = _images_in(sub)
+                if imgs:
+                    pairs.append((imgs, out_dir / ("%s.pdf" % sub.name), sub.name))
     else:
-        imgs = _images_in(folder)
-        if not imgs:
-            raise ValueError("文件夹中没有找到支持的图片：%s" % folder)
-        out = Path(str(output or (DEFAULT_OUTPUT_DIR / ("%s.pdf" % folder.name)))).expanduser()
-        out.parent.mkdir(parents=True, exist_ok=True)
-        pairs = [(imgs, out)]
+        if recursive:
+            # 整棵树的所有图片按目录自然序合成一个 PDF
+            chapters = _chapter_dirs(folder)
+            if not chapters:
+                raise ValueError("递归单本下没有找到含图片的话目录：%s" % folder)
+            imgs = [img for ch, _ in chapters for img in _images_in(ch)]
+            if not imgs:
+                raise ValueError("没有收集到图片：%s" % folder)
+            out = Path(str(output or (DEFAULT_OUTPUT_DIR / ("%s.pdf" % folder.name)))).expanduser()
+            out.parent.mkdir(parents=True, exist_ok=True)
+            pairs = [(imgs, out, folder.name)]
+        else:
+            imgs = _images_in(folder)
+            if not imgs:
+                raise ValueError("文件夹中没有找到支持的图片：%s" % folder)
+            out = Path(str(output or (DEFAULT_OUTPUT_DIR / ("%s.pdf" % folder.name)))).expanduser()
+            out.parent.mkdir(parents=True, exist_ok=True)
+            pairs = [(imgs, out, folder.name)]
 
     ffmpeg = shutil.which("ffmpeg") or "ffmpeg"
     results = []
-    for imgs, out_pdf in pairs:
+    skipped = 0
+    failed = []
+    for imgs, out_pdf, label in pairs:
+        if skip_existing and out_pdf.exists() and out_pdf.stat().st_size > 0:
+            skipped += 1
+            if log:
+                print("[i2p] 跳过（已存在）%s" % out_pdf, file=sys.stderr)
+            continue
         if log:
-            print("[i2p] %s：%d 张 → %s" % (out_pdf.name, len(imgs), out_pdf),
+            print("[i2p] %s：%d 张 → %s" % (label, len(imgs), out_pdf),
                   file=sys.stderr)
 
         def progress(done, total, name, reencoded):
-            if log:
+            if log and verbose:
                 print("[i2p]   第 %d/%d 页 %s%s" % (
                     done, total, name, " (转码)" if reencoded else ""),
                     file=sys.stderr)
 
-        r = build_pdf(imgs, out_pdf, page_size=page_size, quality=quality,
-                      ffmpeg=ffmpeg, progress=progress)
+        try:
+            r = build_pdf(imgs, out_pdf, page_size=page_size, quality=quality,
+                          ffmpeg=ffmpeg, progress=progress)
+        except Exception as e:
+            # 单个话失败不能拖垮整批（1116 话里有一两张坏图很正常）
+            failed.append({"name": label, "error": "%s: %s" % (type(e).__name__, e)})
+            if log:
+                print("[i2p]   ❌ %s 失败：%s" % (label, e), file=sys.stderr)
+            continue
         results.append({
-            "name": out_pdf.stem,
+            "name": label,
             "output": r["output"],
             "pages": r["pages"],
             "size": r["size"],
@@ -133,10 +202,13 @@ def do_convert(folder_raw, mode, output, page_size, quality, open_after, log):
         )
 
     return {
-        "ok": True,
+        "ok": not failed,
         "mode": mode,
         "page_size": page_size,
+        "recursive": bool(recursive),
         "pdf_count": len(results),
+        "skipped": skipped,
+        "failed": failed,
         "pages": sum(r["pages"] for r in results),
         "results": results,
     }
@@ -157,9 +229,14 @@ def main(argv=None):
     ap.add_argument("--list", action="store_true", help="只列出图片与子文件夹（JSON），不转换")
     ap.add_argument("--info", action="store_true", help="环境自检，不转换")
     ap.add_argument("--open", action="store_true", help="完成后用 termux-open 打开生成的 PDF")
+    ap.add_argument("--recursive", "-r", action="store_true",
+                    help="递归：batch=每个话目录一个 PDF（镜像目录结构），single=整棵树合成一个 PDF")
+    ap.add_argument("--skip-existing", action="store_true",
+                    help="输出 PDF 已存在且非空就跳过（断点续跑）")
     ap.add_argument("--json", action="store_true", help="输出 JSON（默认即为 JSON，此参数兼容显式写法）")
     ap.add_argument("--human", action="store_true", help="改用人类可读输出（非 JSON）")
-    ap.add_argument("--quiet", action="store_true", help="不往 stderr 打进度日志")
+    ap.add_argument("--quiet", action="store_true", help="完全静默（不打进度日志）")
+    ap.add_argument("--verbose", "-v", action="store_true", help="逐页打印进度（默认只打每个 PDF 一行）")
     args = ap.parse_args(argv)
 
     try:
@@ -177,6 +254,8 @@ def main(argv=None):
             data = do_convert(
                 args.folder, args.mode, args.output, args.page_size,
                 args.quality, args.open, log=not args.quiet,
+                recursive=args.recursive, skip_existing=args.skip_existing,
+                verbose=args.verbose,
             )
     except (ConversionCancelled, KeyboardInterrupt):
         print(json.dumps({"ok": False, "error": "已中断"}, ensure_ascii=False))
@@ -191,10 +270,20 @@ def main(argv=None):
                 print("✅ %s  %d 页  %s%s" % (
                     r["output"], r["pages"], r["size_h"],
                     "（%d 张转码）" % r["reencoded"] if r["reencoded"] else ""))
+            if data.get("failed"):
+                for f in data["failed"]:
+                    print("❌ %s：%s" % (f["name"], f["error"]))
         else:
             print(json.dumps(data, ensure_ascii=False, indent=2))
     else:
+        # 大规模批量时 results 可能上千条，默认只回摘要 + 失败清单
+        if len(data.get("results", [])) > 20:
+            data = dict(data)
+            data["results"] = data["results"][:3] + ["…（共 %d 条，用 --human 看全量）" % len(data["results"])]
         print(json.dumps(data, ensure_ascii=False, indent=2))
+    # 只有转换结果用 ok 判定失败；--info / --list 不算
+    if "results" in data and not data.get("ok", True):
+        return 1
     return 0
 
 

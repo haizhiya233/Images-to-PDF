@@ -132,9 +132,14 @@ Windows 版靠 IrfanView 的 PDF 插件，插件把 JPEG 解码成裸 RGB 再用
 
 | 输入 | 处理方式 | 画质 / 体积 |
 |---|---|---|
-| baseline JPEG（灰度/RGB、无旋转） | **字节原样嵌入**，不碰 ffmpeg | 像素完全一致，体积 = 源图之和 + 每页约 300B |
-| progressive JPEG、CMYK、带 EXIF 旋转的手机照片 | ffmpeg 转 baseline JPEG | 一次有损重编码，q2 默认 |
+| JPEG（baseline / **progressive** / 灰度 / RGB，无 EXIF 旋转） | **字节原样嵌入**，不碰 ffmpeg | 像素完全一致，体积 = 源图之和 + 每页约 300B |
+| CMYK JPEG、带 EXIF 旋转的手机照片 | ffmpeg 转 baseline JPEG | 一次有损重编码，q2 默认 |
 | PNG / WebP / HEIC / AVIF / GIF / TIFF / BMP | ffmpeg 转 baseline JPEG | 同上 |
+
+progressive JPEG 也是合法 DCT 流，`/DCTDecode` 能直接解码（实测 `pdfimages` /
+`pdftoppm` / Chrome 内建阅读器均可），所以不为它触发重编码——那会白白引入一次
+有损、体积还常变大。实测漫画库 57571 张里约 15% 是 progressive，改掉后全库
+可做到**纯零重编码**，11.4GB 源图产出约 11.4GB PDF。
 
 逐页流式写盘，内存里始终只有一页；原子落盘（同目录临时文件 + `os.replace`），
 失败或点「停止」都不会留下半截 PDF。
@@ -185,7 +190,14 @@ i2p --list /sdcard/DCIM/Camera                  # 只探查：图片数、自然
 i2p /sdcard/DCIM/Camera --json                 # 单个 PDF → 默认输出目录
 i2p /sdcard/DCIM/Camera -o /sdcard/Download/x.pdf --open
 i2p /sdcard/DCIM --mode batch --page-size a4   # 每个子文件夹一个 PDF
-i2p /sdcard/DCIM/Camera --human --quiet        # 人类可读输出、不打进度
+
+# 大型漫画库：递归按「第NNN话」逐个出 PDF，输出目录镜像原结构
+i2p /sdcard/资源 --mode batch -r -o /sdcard/Download/Images-to-PDF \
+    --skip-existing --quiet
+#   -r            递归；batch=每话一个 PDF，single=整棵树合成一个 PDF
+#   --skip-existing 已存在且非空的 PDF 直接跳过（断点续跑，中断后重跑不重复劳动）
+#   --quiet       完全静默；不加则每个 PDF 打一行；-v 才逐页打
+#   单话失败自动隔离并记进 failed 列表，不拖垮整批
 ```
 
 返回示例（成功）：

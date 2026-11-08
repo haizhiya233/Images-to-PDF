@@ -8,9 +8,11 @@
   这里直接自己写 PDF：JPEG 字节流原样作为 /DCTDecode 嵌入，
   **零重编码、像素完全一致、体积 = 源图之和 + 每页几百字节的容器开销**。
 
-  - JPEG（baseline / 灰度 / RGB / 无 EXIF 旋转）→ 字节直通，不碰 ffmpeg
-  - 其余（PNG/WebP/HEIC/AVIF/GIF/TIFF/BMP、progressive JPEG、带 EXIF
-    旋转的手机照片、CMYK JPEG）→ 交给 ffmpeg 转成 baseline JPEG 再嵌
+  - JPEG（baseline / progressive / 灰度 / RGB，无 EXIF 旋转）→ 字节直通，
+    不碰 ffmpeg。progressive 也是合法 DCT 流，PDF 阅读器照常解码
+    （实测 pdfimages / pdftoppm / Chrome PDF 阅读器均可）。
+  - 其余（PNG/WebP/HEIC/AVIF/GIF/TIFF/BMP、带 EXIF 旋转的手机照片、
+    CMYK JPEG）→ 交给 ffmpeg 转成 baseline JPEG 再嵌
   - 逐页流式写盘，内存里始终只有一页，手机内存吃紧也不会爆
   - 原子落盘（同目录临时文件 + os.replace），失败绝不留半截 PDF
 
@@ -150,12 +152,16 @@ def jpeg_info(data):
 
 
 def _can_passthrough(info):
-    """判断这份 JPEG 能否原样嵌入 PDF。"""
-    return (
-        info["colorspace"] is not None
-        and not info["progressive"]
-        and info["orientation"] == 1
-    )
+    """判断这份 JPEG 能否原样嵌入 PDF。
+
+    PDF 的 /DCTDecode 允许 progressive JPEG（baseline 只是 JPEG 的一种编码
+    顺序），实测 pdfimages / pdftoppm / PDF.js 都能正常解码，所以这里不再
+    因 progressive 触发重编码——那会白白引入一次有损、体积还常变大。
+    仍然重编码的只有两类：
+      - colorspace 不是灰度/RGB（CMYK、4 通道等，PDF 需要配套 /Decode）
+      - EXIF orientation != 1（手机照片需要摆正，ffmpeg 会 autorotate）
+    """
+    return info["colorspace"] is not None and info["orientation"] == 1
 
 
 def _transcode(path, dst, quality, ffmpeg):

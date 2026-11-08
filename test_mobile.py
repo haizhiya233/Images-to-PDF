@@ -121,10 +121,11 @@ class TestJpegInfo(unittest.TestCase):
 
 
 class TestPassthroughDecision(unittest.TestCase):
-    def test_progressive_not_passthrough(self):
+    def test_progressive_still_passthrough(self):
+        # progressive 也是合法 DCT 流，PDF 阅读器能解码，不该浪费一次有损重编码
         info = pdf_builder.jpeg_info(_MINI_JPEG)
         info["progressive"] = True
-        self.assertFalse(pdf_builder._can_passthrough(info))
+        self.assertTrue(pdf_builder._can_passthrough(info))
 
     def test_rotated_not_passthrough(self):
         info = pdf_builder.jpeg_info(_MINI_JPEG)
@@ -216,6 +217,23 @@ class TestBuildPdf(unittest.TestCase):
     def test_auto_geometry(self):
         self.assertEqual(pdf_builder._page_geometry(320, 480, "auto"),
                          (320.0, 480.0, 320.0, 480.0, 0.0, 0.0))
+
+    @unittest.skipUnless(shutil.which("ffmpeg"), "需要 ffmpeg")
+    @unittest.skipUnless(shutil.which("magick"), "需要 ImageMagick 造 progressive JPEG")
+    def test_progressive_jpeg_is_embedded_unchanged(self):
+        # 造一张真 progressive JPEG，确认字节原样进 PDF、零重编码
+        import subprocess
+        base = self.inp / "1.jpg"
+        subprocess.run(["magick", "-size", "16x16", "xc:orange", "-quality", "92",
+                        str(base)], check=True, capture_output=True)
+        prog = self.inp / "2.jpg"
+        subprocess.run(["magick", str(base), "-interlace", "Plane", "-quality", "92",
+                        str(prog)], check=True, capture_output=True)
+        info = pdf_builder.jpeg_info(prog.read_bytes())
+        self.assertTrue(info["progressive"])
+        r = pdf_builder.build_pdf([prog], self.out / "x.pdf")
+        self.assertEqual(r["reencoded"], 0)
+        self.assertEqual(self.out.joinpath("x.pdf").read_bytes().count(prog.read_bytes()), 1)
 
     @unittest.skipUnless(shutil.which("ffmpeg"), "需要 ffmpeg")
     def test_png_is_transcoded(self):
